@@ -11,7 +11,9 @@ col_mapping = {
 }
 
 
-def wetlands_within_buffer(buffer: gpd.GeoSeries) -> gpd.GeoDataFrame | None:
+def wetlands_within_buffer(
+    buffer: gpd.GeoSeries, crs: str, nwi_dir: str
+) -> gpd.GeoDataFrame | None:
     # get geopackages
     gpkg_files = Path(nwi_dir).rglob("*.gpkg")
 
@@ -50,7 +52,9 @@ def wetlands_within_buffer(buffer: gpd.GeoSeries) -> gpd.GeoDataFrame | None:
     return clipped_gdf
 
 
-def process_one_nwi(point: GeometryArray, buffer_size: int, prefix: str):
+def process_one_nwi(
+    point: GeometryArray, buffer_size: int, prefix: str, crs: str, nwi_dir: str
+) -> dict:
     # print(f"Processing NWI for buffer size {buffer_size} m")
     # print(f"    Getting bounding box for point...")
     # reproject point to raster CRS - so units match buffer units
@@ -60,7 +64,7 @@ def process_one_nwi(point: GeometryArray, buffer_size: int, prefix: str):
 
     # get wetlands within bbox
     # print(f"    Getting wetlands within buffer...")
-    gdf = wetlands_within_buffer(buffer)
+    gdf = wetlands_within_buffer(buffer, crs, nwi_dir)
 
     # exit early if no wetlands found
     if gdf is None:
