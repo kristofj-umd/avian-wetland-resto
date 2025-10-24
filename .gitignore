@@ -1,3 +1,10 @@
+# Environment variables
 .env
 
-/data
+# data directory
+data/
+
+# Python files
+__pycache__/
+*.py[cod]
+*.so
