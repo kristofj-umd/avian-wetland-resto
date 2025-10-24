@@ -214,9 +214,9 @@ def process_one_landcover(
     buffer_size: int,
     year: int,
     prefix: str,
-    nlcd_paths: dict[int, str],
-    nalcms_paths: dict[int, str],
-    aws_sesh: AWSSession,
+    nlcd_paths: dict[int, str] | dict = {},
+    nalcms_paths: dict[int, str] | dict = {},
+    aws_sesh: AWSSession | None = None,
 ) -> dict:
     # Initialize empty result dict
     result = {}
