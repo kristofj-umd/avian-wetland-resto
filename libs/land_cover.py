@@ -6,6 +6,7 @@
 import os
 from pathlib import Path
 import re
+from functools import lru_cache
 
 import boto3
 import rasterio
@@ -69,6 +70,11 @@ NLCD_CLASS_LUT = {
 # replacing spaces and other non-alphanumeric characters with underscores
 def _nice_string_to_name(nice_string: str) -> str:
     return re.sub(r"[^a-zA-Z0-9_]+", "_", nice_string.replace(" ", "_")).lower()
+
+
+@lru_cache(maxsize=None)
+def _open_raster_cached(path: str):
+    return rasterio.open(path)
 
 
 def nlcd_sesh_setup() -> AWSSession:
@@ -154,28 +160,24 @@ def nlcd_buffer_clip(
 ) -> tuple[np.ndarray, float]:
     # get raster values for buffer
     with rasterio.Env(aws_sesh):
-        with rasterio.open(nlcd_paths[year]) as src:
-            # Calculate area per pixel in square meters
-            area_per_pixel = abs(src.res[0] * src.res[1])
-
-            # reproject point to raster CRS - so units match buffer units
-            point = point.to_crs(src.crs)
-            # create buffer from point, convert to geojson like object
-            buffer = point.buffer(buffer_size)
-
-            # read data from raster within poly (window)
-            data, transform = mask(
-                src, buffer, crop=True, filled=True
-            )  # windowed read
-            # get values from first band, skipping nodata values
-            band = data[0]  # NLCD is single-band categorical
-            nodata = src.nodatavals[0]
-            mask_valid = (
-                (band != nodata)
-                if nodata is not None
-                else np.ones_like(band, dtype=bool)
-            )
-            return band[mask_valid].astype(np.int8), area_per_pixel
+        # Open the NLCD raster using cached function to avoid repeated reads
+        src = _open_raster_cached(nlcd_paths[year])
+        # Reproject point to match raster CRS
+        point = point.to_crs(src.crs)
+        # Create buffer around point and get first geometry (shapely object)
+        geom = point.buffer(buffer_size).iloc[0]
+        # Extract raster data within geometry mask
+        data, _ = mask(src, [geom.__geo_interface__], crop=True, filled=True)
+        # Get first band (NLCD is single-band categorical)
+        band = data[0]
+        # Get nodata value from raster
+        nodata = src.nodatavals[0]
+        # Create mask to exclude nodata values
+        mask_valid = (
+            (band != nodata) if nodata is not None else np.ones_like(band, bool)
+        )
+        # Return valid data as uint16 and pixel area in square meters
+        return band[mask_valid].astype(np.uint16), abs(src.res[0] * src.res[1])
 
 
 def nalcms_buffer_clip(
@@ -185,28 +187,26 @@ def nalcms_buffer_clip(
     nalcms_paths: dict[int, str],
 ) -> tuple[np.ndarray, float]:
     # get raster values for buffer
-    with rasterio.open(nalcms_paths[year]) as src:
-        # Calculate area per pixel in square meters
-        area_per_pixel = abs(src.res[0] * src.res[1])
+    src = _open_raster_cached(nalcms_paths[year])
+    # Calculate area per pixel in square meters
+    area_per_pixel = abs(src.res[0] * src.res[1])
 
-        # reproject point to raster CRS - so units match buffer units
-        point = point.to_crs(src.crs)
-        # create buffer from point, convert to geojson like object
-        buffer = point.buffer(buffer_size)
+    # reproject point to raster CRS - so units match buffer units
+    point = point.to_crs(src.crs)
+    # create buffer from point, convert to geojson like object
+    buffer = point.buffer(buffer_size)
 
-        # read data from raster within poly (window)
-        data, transform = mask(
-            src, buffer, crop=True, filled=True
-        )  # windowed read
-        # get values from first band, skipping nodata values
-        band = data[0]  # NLCD is single-band categorical
-        nodata = src.nodatavals[0]
-        mask_valid = (
-            (band != nodata)
-            if nodata is not None
-            else np.ones_like(band, dtype=bool)
-        )
-        return band[mask_valid].astype(np.int8), area_per_pixel
+    # read data from raster within poly (window)
+    data, transform = mask(src, buffer, crop=True, filled=True)  # windowed read
+    # get values from first band, skipping nodata values
+    band = data[0]  # NLCD is single-band categorical
+    nodata = src.nodatavals[0]
+    mask_valid = (
+        (band != nodata)
+        if nodata is not None
+        else np.ones_like(band, dtype=bool)
+    )
+    return band[mask_valid].astype(np.uint16), area_per_pixel
 
 
 def process_one_landcover(
