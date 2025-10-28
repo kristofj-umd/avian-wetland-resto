@@ -164,10 +164,10 @@ def nlcd_buffer_clip(
         src = _open_raster_cached(nlcd_paths[year])
         # Reproject point to match raster CRS
         point = point.to_crs(src.crs)
-        # Create buffer around point and get first geometry (shapely object)
-        geom = point.buffer(buffer_size).iloc[0]
+        # Create buffer around point
+        buffer = point.buffer(buffer_size)
         # Extract raster data within geometry mask
-        data, _ = mask(src, [geom.__geo_interface__], crop=True, filled=True)
+        data, _ = mask(src, buffer, crop=True, filled=True)
         # Get first band (NLCD is single-band categorical)
         band = data[0]
         # Get nodata value from raster
