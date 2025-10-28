@@ -53,7 +53,7 @@ def wetlands_within_buffer(buffer_gs, crs_target: str, nwi_dir: str):
 
 
 def process_one_nwi(
-    point: GeometryArray, buffer_size: int, prefix: str, crs: str, nwi_dir: str
+    point: GeometryArray, buffer_size: int, source: str, crs: str, nwi_dir: str
 ) -> dict | None:
     # print(f"Processing NWI for buffer size {buffer_size} m")
     # print(f"    Getting bounding box for point...")
@@ -92,8 +92,8 @@ def process_one_nwi(
         pct = sums / total_area
         # For each unique value in the source column
         for val in vc.index:
-            # Create the output metric name using the prefix, buffer size, column shortname and value
-            name = f"{prefix}_buff{buffer_size}_{short}_{val}"
+            # Create the output metric name using the source, buffer size, column shortname and value
+            name = f"{source}_buff{buffer_size}_{short}_{val}"
             # Store count of occurrences for this value
             result[f"{name}_count"] = int(vc[val])
             # Store total area for this value

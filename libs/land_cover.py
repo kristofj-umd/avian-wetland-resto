@@ -213,7 +213,7 @@ def process_one_landcover(
     point: GeometryArray,
     buffer_size: int,
     year: int,
-    prefix: str,
+    source: str,
     nlcd_paths: dict[int, str] | dict = {},
     nalcms_paths: dict[int, str] | dict = {},
     aws_sesh: AWSSession | None = None,
@@ -223,7 +223,7 @@ def process_one_landcover(
 
     try:
         # get raster values for buffer
-        if prefix == "nlcd":
+        if source == "nlcd":
             if year not in nlcd_paths:
                 return result
             vals, area_per_pixel = nlcd_buffer_clip(
@@ -252,20 +252,20 @@ def process_one_landcover(
         class_percents = {k: v / total for k, v in class_counts.items()}
 
         # Use appropriate lookup table
-        lut = NLCD_CLASS_LUT if prefix == "nlcd" else NALCMS_CLASS_LUT
+        lut = NLCD_CLASS_LUT if source == "nlcd" else NALCMS_CLASS_LUT
 
         # iterate over unique values and update dict with count, percent
         for val in [v for v in unique_values if v in lut.keys()]:
             result.update(
                 {
-                    f"{prefix}_buff{buffer_size}_yr{year}_{_nice_string_to_name(lut[val])}_count": class_counts[
+                    f"{source}_buff{buffer_size}_yr{year}_{_nice_string_to_name(lut[val])}_count": class_counts[
                         val
                     ],
-                    f"{prefix}_buff{buffer_size}_yr{year}_{_nice_string_to_name(lut[val])}_area": class_counts[
+                    f"{source}_buff{buffer_size}_yr{year}_{_nice_string_to_name(lut[val])}_area": class_counts[
                         val
                     ]
                     * area_per_pixel,
-                    f"{prefix}_buff{buffer_size}_yr{year}_{_nice_string_to_name(lut[val])}_percent": class_percents[
+                    f"{source}_buff{buffer_size}_yr{year}_{_nice_string_to_name(lut[val])}_percent": class_percents[
                         val
                     ],
                 }
@@ -273,7 +273,7 @@ def process_one_landcover(
 
     except Exception as e:
         print(
-            f"Error processing {prefix} data for year {year}, buffer {buffer_size}m: {e}"
+            f"Error processing {source} data for year {year}, buffer {buffer_size}m: {e}"
         )
 
     return result
