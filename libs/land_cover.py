@@ -5,7 +5,6 @@
 # ---- IMPORTS -----
 import os
 from pathlib import Path
-import re
 from functools import lru_cache
 
 import boto3

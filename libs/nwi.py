@@ -1,10 +1,11 @@
 from pathlib import Path
+from functools import lru_cache
+
 import geopandas as gpd
 import pandas as pd
 import pyogrio as po
 from geopandas.array import GeometryArray
 import shapely
-from functools import lru_cache
 
 from .utils import _nice_string_to_name
 
