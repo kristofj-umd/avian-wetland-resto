@@ -16,6 +16,8 @@ from rasterio.mask import mask
 from geopandas.array import GeometryArray
 from dotenv import load_dotenv
 
+from .utils import _nice_string_to_name
+
 # ----- CONSTANTS -----
 
 # nalcms class lookup table
@@ -64,12 +66,6 @@ NLCD_CLASS_LUT = {
 }
 
 # ----- FUNCTIONS -----
-
-
-# function to transform nice string into a name
-# replacing spaces and other non-alphanumeric characters with underscores
-def _nice_string_to_name(nice_string: str) -> str:
-    return re.sub(r"[^a-zA-Z0-9_]+", "_", nice_string.replace(" ", "_")).lower()
 
 
 @lru_cache(maxsize=None)
@@ -222,6 +218,7 @@ def process_one_landcover(
     result = {}
 
     try:
+        breakpoint()
         # get raster values for buffer
         if source == "nlcd":
             if year not in nlcd_paths:

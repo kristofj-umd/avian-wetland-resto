@@ -6,6 +6,8 @@ from geopandas.array import GeometryArray
 import shapely
 from functools import lru_cache
 
+from .utils import _nice_string_to_name
+
 col_mapping = {
     "WETLAND_TYPE": "type",
     "ATTRIBUTE": "code",
@@ -95,11 +97,11 @@ def process_one_nwi(
             # Create the output metric name using the source, buffer size, column shortname and value
             name = f"{source}_buff{buffer_size}_{short}_{val}"
             # Store count of occurrences for this value
-            result[f"{name}_count"] = int(vc[val])
+            result[f"{_nice_string_to_name(name)}_count"] = int(vc[val])
             # Store total area for this value
-            result[f"{name}_area"] = float(sums[val])
+            result[f"{_nice_string_to_name(name)}_area"] = float(sums[val])
             # Store percentage of total area for this value
-            result[f"{name}_percent"] = float(pct[val])
+            result[f"{_nice_string_to_name(name)}_percent"] = float(pct[val])
 
     return result
     # print(f"result: {result}")
