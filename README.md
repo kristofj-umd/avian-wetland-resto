@@ -8,7 +8,7 @@ Files related to Investigating the Impact of Great Lakes Coastal Wetland Restora
 
 Landcover and wetland data were summarized by a set of buffers surrounding bird count locations.
 
-**[METHODS](class_summary_by_buffer.ipynb)**
+**[METHODS](class_summary_by_buffer.md)**
 
 **[CODE](class_summary_by_buffer.py)**
 
