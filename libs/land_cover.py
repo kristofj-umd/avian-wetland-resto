@@ -11,6 +11,7 @@ import time
 
 
 import boto3
+from osgeo import gdal
 import rasterio
 import numpy as np
 
@@ -79,10 +80,10 @@ def nlcd_sesh_setup() -> AWSSession:
     """
     Set up AWS S3 access for NLCD data retrieval.
     """
-    print("Setting up AWS S3 access for NLCD data...")
+    # print("Setting up AWS S3 access for NLCD data...")
 
     # ----- Configure AWS S3 access -----
-    print("Loading environment variables...")
+    # print("Loading environment variables...")
     # AWS credentials from .env file
     load_dotenv(dotenv_path=Path.cwd() / ".env")
     # set the default region
@@ -91,7 +92,7 @@ def nlcd_sesh_setup() -> AWSSession:
     os.environ["AWS_NO_SIGN_REQUEST"] = "NO"
 
     # ----- Initialize S3 and AWS session -----
-    print("Initializing AWS session...")
+    # print("Initializing AWS session...")
     # build a signed AWS session that includes requester-pays
     boto_sesh = boto3.Session(
         aws_access_key_id=os.environ["AWS_ACCESS_KEY_ID"],
@@ -99,16 +100,16 @@ def nlcd_sesh_setup() -> AWSSession:
         region_name="us-west-2",
     )
     aws_session = AWSSession(boto_sesh, requester_pays=True)
-    print("AWS session setup complete.")
+    # print("AWS session setup complete.")
     return aws_session
 
 
 def get_nlcd_paths() -> dict[int, str]:
-    print("Starting NLCD path retrieval...")
+    # print("Starting NLCD path retrieval...")
     # Specify the bucket name and prefix
     bucket_name = "usgs-landcover"
     base_prefix = "annual-nlcd/c1/v0/cu/mosaic/"
-    print(f"Using bucket: {bucket_name}")
+    # print(f"Using bucket: {bucket_name}")
 
     # Define the years of interest and their expected filenames
     nlcd_filenames = {
@@ -117,18 +118,18 @@ def get_nlcd_paths() -> dict[int, str]:
         2020: "Annual_NLCD_LndCov_2020_CU_C1V0.tif",
         2023: "Annual_NLCD_LndCov_2023_CU_C1V0.tif",
     }
-    print(f"Checking availability for years: {list(nlcd_filenames.keys())}")
+    # print(f"Checking availability for years: {list(nlcd_filenames.keys())}")
 
     # Initialize the S3 client
-    print("Initializing S3 client...")
+    # print("Initializing S3 client...")
     s3 = boto3.client("s3", region_name="us-west-2")
 
     # Check for the existence of each file
     found_objects = False
     nlcd_paths = {}
-    print("Checking for available NLCD files...")
+    # print("Checking for available NLCD files...")
     for year, filename in nlcd_filenames.items():
-        print(f"Checking year {year}...", end=" ")
+        # print(f"Checking year {year}...", end=" ")
         s3_key = base_prefix + filename
         try:
             s3.head_object(
@@ -136,7 +137,7 @@ def get_nlcd_paths() -> dict[int, str]:
             )
             nlcd_paths[year] = f"s3://{bucket_name}/{s3_key}"
             found_objects = True
-            print("Found!")
+            # print("Found!")
         except s3.exceptions.ClientError as e:
             if e.response["Error"]["Code"] == "404":
                 print(f"NOT found: s3://{bucket_name}/{s3_key}")
@@ -161,25 +162,25 @@ def nlcd_buffer_clip(
     nlcd_paths: dict[int, str],
 ) -> tuple[np.ndarray, float]:
     start_time = time.time()
-    print(f"Starting NLCD buffer clip for year {year}...")
+    # print(f"Starting NLCD buffer clip for year {year}...")
 
     # get raster values for buffer
     with rasterio.Env(aws_sesh):
         # Open the NLCD raster using cached function to avoid repeated reads
-        print("Opening NLCD raster...")
+        # print("Opening NLCD raster...")
         src = _open_raster_cached(nlcd_paths[year])
-        print(f"Raster opened in {time.time() - start_time:.2f} seconds")
+        # print(f"Raster opened in {time.time() - start_time:.2f} seconds")
 
         # Reproject point to match raster CRS
-        print("Reprojecting point...")
+        # print("Reprojecting point...")
         point = point.to_crs(src.crs)
 
         # Create buffer around point
-        print(f"Creating {buffer_size}m buffer...")
+        # print(f"Creating {buffer_size}m buffer...")
         buffer = point.buffer(buffer_size)
 
         # Extract raster data within geometry mask
-        print("Extracting raster data within buffer...")
+        # print("Extracting raster data within buffer...")
         data, _ = mask(src, buffer, crop=True, filled=True)
 
         # Get first band (NLCD is single-band categorical)
@@ -195,9 +196,9 @@ def nlcd_buffer_clip(
         result = band[mask_valid].astype(np.uint16), abs(
             src.res[0] * src.res[1]
         )
-        print(
-            f"NLCD buffer clip completed in {time.time() - start_time:.2f} seconds"
-        )
+        # print(
+        #     f"NLCD buffer clip completed in {time.time() - start_time:.2f} seconds"
+        # )
         return result
 
 
@@ -208,26 +209,26 @@ def nalcms_buffer_clip(
     nalcms_paths: dict[int, str],
 ) -> tuple[np.ndarray, float]:
     start_time = time.time()
-    print(f"Starting NALCMS buffer clip for year {year}...")
+    # print(f"Starting NALCMS buffer clip for year {year}...")
 
     # get raster values for buffer
-    print("Opening NALCMS raster...")
+    # print("Opening NALCMS raster...")
     src = _open_raster_cached(nalcms_paths[year])
-    print(f"Raster opened in {time.time() - start_time:.2f} seconds")
+    # print(f"Raster opened in {time.time() - start_time:.2f} seconds")
 
     # Calculate area per pixel in square meters
     area_per_pixel = abs(src.res[0] * src.res[1])
 
     # reproject point to raster CRS - so units match buffer units
-    print("Reprojecting point...")
+    # print("Reprojecting point...")
     point = point.to_crs(src.crs)
 
     # create buffer from point, convert to geojson like object
-    print(f"Creating {buffer_size}m buffer...")
+    # print(f"Creating {buffer_size}m buffer...")
     buffer = point.buffer(buffer_size)
 
     # read data from raster within poly (window)
-    print("Extracting raster data within buffer...")
+    # print("Extracting raster data within buffer...")
     data, transform = mask(src, buffer, crop=True, filled=True)  # windowed read
 
     # get values from first band, skipping nodata values
@@ -240,9 +241,9 @@ def nalcms_buffer_clip(
     )
 
     result = band[mask_valid].astype(np.uint16), area_per_pixel
-    print(
-        f"NALCMS buffer clip completed in {time.time() - start_time:.2f} seconds"
-    )
+    # print(
+    #     f"NALCMS buffer clip completed in {time.time() - start_time:.2f} seconds"
+    # )
     return result
 
 
@@ -256,7 +257,7 @@ def process_one_landcover(
     aws_sesh: AWSSession | None = None,
 ) -> dict:
     start_time = time.time()
-    print(f"Starting landcover processing for {source}, year {year}...")
+    # print(f"Starting landcover processing for {source}, year {year}...")
 
     # Initialize empty result dict
     result = {}
@@ -265,27 +266,29 @@ def process_one_landcover(
         # get raster values for buffer
         if source == "nlcd":
             if year not in nlcd_paths:
-                print(f"Year {year} not found in NLCD paths")
+                # print(f"Year {year} not found in NLCD paths")
                 return result
-            print("Extracting NLCD buffer values...")
+            # print("Extracting NLCD buffer values...")
+            if aws_sesh is None:
+                raise ValueError("AWS session is required for NLCD data access")
             vals, area_per_pixel = nlcd_buffer_clip(
                 point, buffer_size, year, aws_sesh, nlcd_paths
             )
         else:
             if year not in nalcms_paths:
-                print(f"Year {year} not found in NALCMS paths")
+                # print(f"Year {year} not found in NALCMS paths")
                 return result
-            print("Extracting NALCMS buffer values...")
+            # print("Extracting NALCMS buffer values...")
             vals, area_per_pixel = nalcms_buffer_clip(
                 point, buffer_size, year, nalcms_paths
             )
 
         # Check if we got any valid values
         if vals is None or len(vals) == 0:
-            print("No valid values found in buffer")
+            # print("No valid values found in buffer")
             return result
 
-        print("Calculating class statistics...")
+        # print("Calculating class statistics...")
         # get count by class
         unique_values, counts = np.unique(vals, return_counts=True)
         class_counts = dict(zip(unique_values, counts))
@@ -293,7 +296,7 @@ def process_one_landcover(
         # calculate percent of total area occupied by each class
         total = np.sum(counts)
         if total == 0:
-            print("Total count is zero")
+            # print("Total count is zero")
             return result
 
         class_percents = {k: v / total for k, v in class_counts.items()}
@@ -301,7 +304,7 @@ def process_one_landcover(
         # Use appropriate lookup table
         lut = NLCD_CLASS_LUT if source == "nlcd" else NALCMS_CLASS_LUT
 
-        print("Building result dictionary...")
+        # print("Building result dictionary...")
         # iterate over unique values and update dict with count, percent
         for val in [v for v in unique_values if v in lut.keys()]:
             result.update(
@@ -319,9 +322,9 @@ def process_one_landcover(
                 }
             )
 
-        print(
-            f"Landcover processing completed in {time.time() - start_time:.2f} seconds"
-        )
+        # print(
+        #     f"Landcover processing completed in {time.time() - start_time:.2f} seconds"
+        # )
 
     except Exception as e:
         print(
