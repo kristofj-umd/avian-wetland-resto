@@ -51,120 +51,13 @@ Bird count locations were provided by Annie & Isabel. From the original methods 
 
 
 
-
-
-<div>
-<style scoped>
-    .dataframe tbody tr th:only-of-type {
-        vertical-align: middle;
-    }
-
-    .dataframe tbody tr th {
-        vertical-align: top;
-    }
-
-    .dataframe thead th {
-        text-align: right;
-    }
-</style>
-<table border="1" class="dataframe">
-  <thead>
-    <tr style="text-align: right;">
-      <th></th>
-      <th>site_id</th>
-      <th>crew_name</th>
-      <th>year</th>
-      <th>date</th>
-      <th>sample</th>
-      <th>point_id</th>
-      <th>bearing</th>
-      <th>waypoint</th>
-      <th>longitude</th>
-      <th>latitude</th>
-      <th>coord_qual</th>
-      <th>comments</th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <th>0</th>
-      <td>1</td>
-      <td>SUNY-B</td>
-      <td>2015</td>
-      <td>5/28/2015</td>
-      <td>1</td>
-      <td>1</td>
-      <td>140</td>
-      <td>AB0001.1.BE</td>
-      <td>-78.840043</td>
-      <td>43.312097</td>
-      <td>Excellent</td>
-      <td>NaN</td>
-    </tr>
-    <tr>
-      <th>1</th>
-      <td>1</td>
-      <td>SUNY-B</td>
-      <td>2020</td>
-      <td>6/1/2020</td>
-      <td>1</td>
-      <td>1</td>
-      <td>238</td>
-      <td>AB0001.1.AM</td>
-      <td>-78.840627</td>
-      <td>43.312285</td>
-      <td>Confirmed</td>
-      <td>NaN</td>
-    </tr>
-    <tr>
-      <th>2</th>
-      <td>4</td>
-      <td>SUNY-B</td>
-      <td>2015</td>
-      <td>5/28/2015</td>
-      <td>1</td>
-      <td>1</td>
-      <td>350</td>
-      <td>AB0004.1.BE</td>
-      <td>-78.744200</td>
-      <td>43.329043</td>
-      <td>Excellent</td>
-      <td>NaN</td>
-    </tr>
-    <tr>
-      <th>3</th>
-      <td>5</td>
-      <td>SUNY-B</td>
-      <td>2013</td>
-      <td>6/12/2013</td>
-      <td>1</td>
-      <td>1</td>
-      <td>183</td>
-      <td>B0005.PM</td>
-      <td>-78.715802</td>
-      <td>43.334753</td>
-      <td>Excellent</td>
-      <td>NaN</td>
-    </tr>
-    <tr>
-      <th>4</th>
-      <td>5</td>
-      <td>SUNY-B</td>
-      <td>2018</td>
-      <td>5/24/2018</td>
-      <td>1</td>
-      <td>1</td>
-      <td>180</td>
-      <td>AB0005.1.PM</td>
-      <td>-78.716118</td>
-      <td>43.335103</td>
-      <td>Excellent</td>
-      <td>NaN</td>
-    </tr>
-  </tbody>
-</table>
-</div>
-
+|   site_id | crew_name   |   year | date      |   sample |   point_id |   bearing | waypoint    |   longitude |   latitude | coord_qual   |   comments |
+|----------:|:------------|-------:|:----------|---------:|-----------:|----------:|:------------|------------:|-----------:|:-------------|-----------:|
+|         1 | SUNY-B      |   2015 | 5/28/2015 |        1 |          1 |       140 | AB0001.1.BE |    -78.84   |    43.3121 | Excellent    |        nan |
+|         1 | SUNY-B      |   2020 | 6/1/2020  |        1 |          1 |       238 | AB0001.1.AM |    -78.8406 |    43.3123 | Confirmed    |        nan |
+|         4 | SUNY-B      |   2015 | 5/28/2015 |        1 |          1 |       350 | AB0004.1.BE |    -78.7442 |    43.329  | Excellent    |        nan |
+|         5 | SUNY-B      |   2013 | 6/12/2013 |        1 |          1 |       183 | B0005.PM    |    -78.7158 |    43.3348 | Excellent    |        nan |
+|         5 | SUNY-B      |   2018 | 5/24/2018 |        1 |          1 |       180 | AB0005.1.PM |    -78.7161 |    43.3351 | Excellent    |        nan |
 
 
 
@@ -174,75 +67,13 @@ Bird count locations were provided by Annie & Isabel. From the original methods 
     - lon: Lon
 
 
-<div>
-<style scoped>
-    .dataframe tbody tr th:only-of-type {
-        vertical-align: middle;
-    }
-
-    .dataframe tbody tr th {
-        vertical-align: top;
-    }
-
-    .dataframe thead th {
-        text-align: right;
-    }
-</style>
-<table border="1" class="dataframe">
-  <thead>
-    <tr style="text-align: right;">
-      <th></th>
-      <th>Source</th>
-      <th>Site</th>
-      <th>PID</th>
-      <th>Lat</th>
-      <th>Lon</th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <th>0</th>
-      <td>21_NRRI, CWM</td>
-      <td>21st Ave W</td>
-      <td>7049.1.2</td>
-      <td>46.757203</td>
-      <td>-92.125481</td>
-    </tr>
-    <tr>
-      <th>1</th>
-      <td>21_NRRI, CWM</td>
-      <td>21st Ave W</td>
-      <td>7049.2.2</td>
-      <td>46.759090</td>
-      <td>-92.122097</td>
-    </tr>
-    <tr>
-      <th>2</th>
-      <td>21_NRRI, CWM</td>
-      <td>21st Ave W</td>
-      <td>7049.1</td>
-      <td>46.763798</td>
-      <td>-92.123170</td>
-    </tr>
-    <tr>
-      <th>3</th>
-      <td>21_NRRI, CWM</td>
-      <td>21st Ave W</td>
-      <td>7049.2</td>
-      <td>46.760550</td>
-      <td>-92.123525</td>
-    </tr>
-    <tr>
-      <th>4</th>
-      <td>CWM</td>
-      <td>40th Ave W</td>
-      <td>7048.1</td>
-      <td>46.739972</td>
-      <td>-92.153694</td>
-    </tr>
-  </tbody>
-</table>
-</div>
+| Source       | Site       | PID      |     Lat |      Lon |
+|:-------------|:-----------|:---------|--------:|---------:|
+| 21_NRRI, CWM | 21st Ave W | 7049.1.2 | 46.7572 | -92.1255 |
+| 21_NRRI, CWM | 21st Ave W | 7049.2.2 | 46.7591 | -92.1221 |
+| 21_NRRI, CWM | 21st Ave W | 7049.1   | 46.7638 | -92.1232 |
+| 21_NRRI, CWM | 21st Ave W | 7049.2   | 46.7606 | -92.1235 |
+| CWM          | 40th Ave W | 7048.1   | 46.74   | -92.1537 |
 
 
 ## Process each location, buffer
