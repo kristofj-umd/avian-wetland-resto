@@ -4,6 +4,9 @@
 # data directory
 data/
 
+# arcpro
+isabel-bird-arcpro/
+
 # Python files
 __pycache__/
 *.py[cod]
