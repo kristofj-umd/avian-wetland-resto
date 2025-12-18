@@ -14,7 +14,7 @@ _Deliverable_: CSV file for each bird count dataset containing class summaries f
 ##### [National Land Cover Database (NLCD)](https://www.usgs.gov/data/annual-national-land-cover-database-nlcd-collection-1-products-ver-11-june-2025)  
 *source*: United States Geological Survey (USGS)  
 *years*: 2010, 2015, 2020, 2023  
-*metadata*: https://www.mrlc.gov/downloads/sciweb1/shared/mrlc/metadata/Annual_NLCD_LndCov_2024_CU_C1V1.xml
+*metadata*: https://www.mrlc.gov/downloads/sciweb1/shared/mrlc/metadata/Annual_NLCD_LndCov_2024_CU_C1V1.xml  
 *how to cite*:  
 U.S. Geological Survey (USGS), 2024, Annual NLCD Collection 1 Science Products (ver. 1.1, June 2025): U.S. Geological Survey data release, https://doi.org/10.5066/P94UXNTS.
 
