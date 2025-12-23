@@ -30,45 +30,27 @@ from matplotlib.patches import Polygon as MplPolygon
 from shapely.geometry import mapping
 from tqdm import tqdm
 
-# Data paths
-SITES_SHAPEFILE = Path(
-    "data/sites_v2024-08-02-20251027T153209Z-1-001/sites_v2024-08-02/sites_all_polygons.shp"
-)
+# Import shared utilities
+import hls_utils
+
+# Viewer-specific configuration
 DEFAULT_RESULTS_CSV = Path("hls_site_results.csv")
 OUTPUT_DIR = Path("output/static_maps")
 
-# HLS band names for RGB visualization
-HLS_BANDS = {
-    "Landsat": {"red": "B04", "green": "B03", "blue": "B02"},
-    "Sentinel-2": {"red": "B04", "green": "B03", "blue": "B02"},
-}
-
-# Planetary Computer collection IDs (HLS v2.0)
-PC_COLLECTIONS = {
-    "Landsat": "hls2-l30",
-    "Sentinel-2": "hls2-s30",
-}
-
-# Cache for site geometries
+# Cache for site geometries (viewer-specific optimization)
 _sites_cache: Optional[gpd.GeoDataFrame] = None
 
 
-def configure_gdal_for_nasa():
-    """Configure GDAL to access NASA Earthdata Cloud COGs."""
-    gdal.SetConfigOption("GDAL_HTTP_COOKIEFILE", "~/cookies.txt")
-    gdal.SetConfigOption("GDAL_HTTP_COOKIEJAR", "~/cookies.txt")
-    gdal.SetConfigOption("GDAL_DISABLE_READDIR_ON_OPEN", "EMPTY_DIR")
-    gdal.SetConfigOption("CPL_VSIL_CURL_ALLOWED_EXTENSIONS", "TIF")
-    gdal.SetConfigOption("GDAL_HTTP_UNSAFESSL", "YES")
-    gdal.SetConfigOption("GDAL_HTTP_MAX_RETRY", "10")
-    gdal.SetConfigOption("GDAL_HTTP_RETRY_DELAY", "0.5")
-
-
 def load_all_sites() -> gpd.GeoDataFrame:
-    """Load all site geometries (cached)."""
+    """
+    Load all site geometries (cached) in EPSG:4326 for web mapping.
+
+    This is a viewer-specific wrapper around hls_utils.load_site_geometries()
+    that ensures geometries are in web-friendly WGS84 projection.
+    """
     global _sites_cache
     if _sites_cache is None:
-        sites_gdf = gpd.read_file(SITES_SHAPEFILE)
+        sites_gdf = hls_utils.load_site_geometries(hls_utils.SITES_SHAPEFILE, "SITE")
         sites_gdf = sites_gdf.rename(columns={"SITE": "site_id"})
         if sites_gdf.crs != "EPSG:4326":
             sites_gdf = sites_gdf.to_crs("EPSG:4326")
@@ -85,66 +67,7 @@ def load_site_geometry(site_id: int):
     return site.iloc[0]
 
 
-def find_granule_by_id(granule_id: str):
-    """
-    Search for a specific HLS granule by ID using earthaccess.
-
-    Returns the granule object with data_links(), or None if not found.
-    """
-    # Extract product type from granule ID (e.g., "HLS.L30..." -> "L30")
-    match = re.match(r"HLS\.([LS]30)\.", granule_id)
-    if not match:
-        return None
-
-    product = match.group(1)
-    short_name = f"HLS{product}"
-
-    try:
-        # Search for the specific granule
-        results = earthaccess.search_data(
-            short_name=short_name, granule_name=granule_id, count=1
-        )
-        return results[0] if results else None
-    except Exception as e:
-        print(f"  Error searching for {granule_id}: {e}")
-        return None
-
-
-def get_band_urls(granule, product: str) -> dict:
-    """
-    Extract RGB band URLs from a granule.
-
-    Returns dict with keys: 'red', 'green', 'blue'
-    """
-    if granule is None:
-        return {}
-
-    # Get all data links
-    try:
-        if hasattr(granule, "data_links") and callable(granule.data_links):
-            links = granule.data_links()
-        else:
-            links = []
-    except Exception:
-        links = []
-
-    if not links:
-        return {}
-
-    # Get band names for this product
-    bands = HLS_BANDS.get(product, {})
-    if not bands:
-        return {}
-
-    # Find URLs for each RGB band
-    band_urls = {}
-    for color, band_name in bands.items():
-        for url in links:
-            if f".{band_name}.tif" in url:
-                band_urls[color] = url
-                break
-
-    return band_urls
+# Note: find_granule_by_id and get_band_urls moved to hls_utils module
 
 
 def create_rgb_image(
@@ -202,11 +125,10 @@ def create_rgb_image(
         geoms, blue.spatial_ref.crs_wkt, all_touched=True
     )
 
-    # Apply scale factor (HLS uses 0.0001)
-    scale_factor = 0.0001
-    red_data = red_cropped.data * scale_factor
-    green_data = green_cropped.data * scale_factor
-    blue_data = blue_cropped.data * scale_factor
+    # Apply HLS scale factor to convert int16 to reflectance
+    red_data = red_cropped.data * hls_utils.HLS_SCALE_FACTOR
+    green_data = green_cropped.data * hls_utils.HLS_SCALE_FACTOR
+    blue_data = blue_cropped.data * hls_utils.HLS_SCALE_FACTOR
 
     # Stack into RGB array
     rgb = np.stack([red_data, green_data, blue_data], axis=-1)
@@ -399,7 +321,7 @@ def create_folium_viewer(
             print(f"  [{idx}] {year_val} | {product} | {granule_id[:40]}...")
 
             # Get Planetary Computer collection and item ID
-            collection = PC_COLLECTIONS.get(product)
+            collection = hls_utils.PC_COLLECTIONS.get(product)
             if not collection:
                 print(f"       ✗ Unknown product type: {product}")
                 layers_failed += 1
@@ -534,7 +456,7 @@ def export_images_from_csv(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Configure GDAL for NASA cloud access
-    configure_gdal_for_nasa()
+    hls_utils.configure_gdal_for_nasa()
 
     # Authenticate with earthaccess
     print("\nAuthenticating with NASA Earthdata...")
@@ -581,14 +503,14 @@ def export_images_from_csv(
             geometry = site.geometry
 
             # Search for granule to get data URLs
-            granule = find_granule_by_id(granule_id)
+            granule = hls_utils.find_granule_by_id(granule_id)
             if granule is None:
                 print(f"\n  Warning: Could not find granule {granule_id}")
                 fail_count += 1
                 continue
 
             # Get RGB band URLs
-            band_urls = get_band_urls(granule, product)
+            band_urls = hls_utils.get_rgb_band_urls(granule, product)
             if not band_urls or len(band_urls) < 3:
                 print(f"\n  Warning: Could not get band URLs for {granule_id}")
                 fail_count += 1

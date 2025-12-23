@@ -38,9 +38,8 @@ from __future__ import annotations
 
 import argparse
 import logging
-import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 import numpy as np
 import pandas as pd
@@ -53,6 +52,9 @@ from shapely.geometry import mapping
 from tqdm import tqdm
 
 import earthaccess
+
+# Import shared utilities
+import hls_utils
 
 # ============================================================================
 # Logging Configuration
@@ -68,238 +70,10 @@ if not logger.handlers:
     logger.addHandler(handler)
 
 
-# ============================================================================
-# Configuration Constants
-# ============================================================================
-
-# HLS L30 (Landsat 8/9) spectral bands - 10 bands
-L30_BANDS = [
-    "B01",
-    "B02",
-    "B03",
-    "B04",
-    "B05",
-    "B06",
-    "B07",
-    "B09",
-    "B10",
-    "B11",
-]
-
-# HLS S30 (Sentinel-2) spectral bands - 13 bands
-S30_BANDS = [
-    "B01",
-    "B02",
-    "B03",
-    "B04",
-    "B05",
-    "B06",
-    "B07",
-    "B08",
-    "B8A",
-    "B09",
-    "B10",
-    "B11",
-    "B12",
-]
-
-# Descriptive band names for Landsat 8/9 (L30)
-L30_BAND_NAMES = {
-    "B01": "Coastal_Aerosol",
-    "B02": "Blue",
-    "B03": "Green",
-    "B04": "Red",
-    "B05": "NIR",
-    "B06": "SWIR1",
-    "B07": "SWIR2",
-    "B09": "Cirrus",
-    "B10": "Thermal1",
-    "B11": "Thermal2",
-}
-
-# Descriptive band names for Sentinel-2 (S30)
-S30_BAND_NAMES = {
-    "B01": "Coastal_Aerosol",
-    "B02": "Blue",
-    "B03": "Green",
-    "B04": "Red",
-    "B05": "Red_Edge1",
-    "B06": "Red_Edge2",
-    "B07": "Red_Edge3",
-    "B08": "NIR_Broad",
-    "B8A": "NIR_Narrow",
-    "B09": "Water_Vapor",
-    "B10": "Cirrus",
-    "B11": "SWIR1",
-    "B12": "SWIR2",
-}
-
-# Mapping from CSV product name to band list
-PRODUCT_BANDS = {
-    "Landsat": L30_BANDS,
-    "Sentinel-2": S30_BANDS,
-}
-
-# Mapping from CSV product name to band name lookup
-PRODUCT_BAND_NAMES = {
-    "Landsat": L30_BAND_NAMES,
-    "Sentinel-2": S30_BAND_NAMES,
-}
-
-# Sites shapefile path (same as search script)
-SITES_SHAPEFILE = Path(
-    "data/sites_v2024-08-02-20251027T153209Z-1-001/sites_v2024-08-02/sites_all_polygons.shp"
-)
+# Note: Configuration constants moved to hls_utils module
 
 
-# ============================================================================
-# GDAL Configuration
-# ============================================================================
-
-
-def configure_gdal_for_nasa():
-    """
-    Configure GDAL to access NASA Earthdata Cloud COGs.
-
-    Sets environment variables for:
-    - Cookie-based authentication
-    - Efficient cloud access (disable directory reads)
-    - Retry logic for transient failures
-    """
-    gdal.SetConfigOption("GDAL_HTTP_COOKIEFILE", "~/cookies.txt")
-    gdal.SetConfigOption("GDAL_HTTP_COOKIEJAR", "~/cookies.txt")
-    gdal.SetConfigOption("GDAL_DISABLE_READDIR_ON_OPEN", "EMPTY_DIR")
-    gdal.SetConfigOption("CPL_VSIL_CURL_ALLOWED_EXTENSIONS", "TIF")
-    gdal.SetConfigOption("GDAL_HTTP_UNSAFESSL", "YES")
-    gdal.SetConfigOption("GDAL_HTTP_MAX_RETRY", "10")
-    gdal.SetConfigOption("GDAL_HTTP_RETRY_DELAY", "0.5")
-
-
-# ============================================================================
-# Site Geometry Loading
-# ============================================================================
-
-
-def load_site_geometries(path: Path, id_col: str = "SITE") -> gpd.GeoDataFrame:
-    """
-    Load site geometries and fix invalid ones.
-
-    Args:
-        path: Path to shapefile
-        id_col: Column name for site IDs
-
-    Returns:
-        GeoDataFrame with dissolved geometries per site
-    """
-    logger.info(f"Loading site geometries from {path}")
-    gdf = gpd.read_file(path)
-
-    if id_col not in gdf.columns:
-        raise ValueError(
-            f"Column '{id_col}' not found. Available: {list(gdf.columns)}"
-        )
-
-    # Fix invalid geometries with buffer(0)
-    gdf["geometry"] = gdf["geometry"].apply(
-        lambda g: g.buffer(0) if g and not g.is_valid else g
-    )
-
-    # Dissolve/union by site id
-    gdf = gdf[[id_col, "geometry"]].dropna(subset=["geometry"]).copy()
-    dissolved = gdf.dissolve(by=id_col, as_index=False)
-
-    logger.info(f"Loaded {len(dissolved)} site geometries")
-    return dissolved
-
-
-# ============================================================================
-# CMR Query Functions
-# ============================================================================
-
-
-def find_granule_by_id(granule_id: str):
-    """
-    Search for a specific HLS granule by ID using earthaccess.
-
-    Args:
-        granule_id: HLS granule identifier (e.g., "HLS.L30.T17TQJ.2020170T155042.v2.0")
-
-    Returns:
-        Granule object with data_links() method, or None if not found
-    """
-    # Extract product type from granule ID (e.g., "HLS.L30..." -> "L30")
-    match = re.match(r"HLS\.([LS]30)\.", granule_id)
-    if not match:
-        logger.warning(f"Invalid granule ID format: {granule_id}")
-        return None
-
-    product = match.group(1)
-    short_name = f"HLS{product}"
-
-    try:
-        logger.debug(f"Querying CMR for {granule_id}")
-        results = earthaccess.search_data(
-            short_name=short_name, granule_name=granule_id, count=1
-        )
-        return results[0] if results else None
-    except Exception as e:
-        logger.error(
-            f"CMR query failed for {granule_id}: {type(e).__name__}: {e}"
-        )
-        return None
-
-
-def get_all_band_urls(
-    granule, product: str
-) -> Tuple[Dict[str, str], Optional[str]]:
-    """
-    Extract all spectral band URLs and Fmask URL from a granule.
-
-    Args:
-        granule: earthaccess granule object
-        product: "Landsat" or "Sentinel-2"
-
-    Returns:
-        Tuple of (band_urls dict, fmask_url)
-        - band_urls: {"B01": "https://...", "B02": "https://...", ...}
-        - fmask_url: "https://...Fmask.tif" or None
-    """
-    if granule is None:
-        return {}, None
-
-    # Get all data links from granule
-    try:
-        if hasattr(granule, "data_links") and callable(granule.data_links):
-            links = granule.data_links()
-        else:
-            links = []
-    except Exception as e:
-        logger.warning(f"Failed to get data links: {e}")
-        links = []
-
-    if not links:
-        return {}, None
-
-    band_list = PRODUCT_BANDS.get(product, [])
-    band_urls = {}
-    fmask_url = None
-
-    for url in links:
-        # Check for Fmask
-        if "Fmask.tif" in url or ".Fmask." in url:
-            fmask_url = url
-            continue
-
-        # Check for each spectral band
-        for band in band_list:
-            if f".{band}.tif" in url:
-                band_urls[band] = url
-                break
-
-    logger.debug(
-        f"Found {len(band_urls)} band URLs and fmask={fmask_url is not None}"
-    )
-    return band_urls, fmask_url
+# Note: Site geometry loading, CMR query functions moved to hls_utils module
 
 
 # ============================================================================
@@ -385,8 +159,8 @@ def stack_bands_to_cog(
     if first_band.rio.transform() is not None:
         ds = ds.rio.write_transform(first_band.rio.transform())
 
-    # Set common attributes
-    ds.attrs["scale_factor"] = 0.0001
+    # Set common attributes (HLS reflectance scaling)
+    ds.attrs["scale_factor"] = hls_utils.HLS_SCALE_FACTOR
     ds.attrs["add_offset"] = 0.0
 
     # Ensure output directory exists
@@ -470,18 +244,18 @@ def process_granule(
         return False, f"No geometry for site {site_id}"
 
     # Re-query CMR for band URLs
-    granule = find_granule_by_id(granule_id)
+    granule = hls_utils.find_granule_by_id(granule_id)
     if granule is None:
         return False, f"Granule not found in CMR: {granule_id}"
 
-    band_urls, fmask_url = get_all_band_urls(granule, product)
+    band_urls, fmask_url = hls_utils.get_all_band_urls(granule, product)
     if not band_urls:
         return False, f"No band URLs found for {granule_id}"
 
     # Clip each spectral band
     clipped_bands = {}
-    band_order = PRODUCT_BANDS[product]
-    band_name_lookup = PRODUCT_BAND_NAMES[product]
+    band_order = hls_utils.PRODUCT_BANDS[product]
+    band_name_lookup = hls_utils.PRODUCT_BAND_NAMES[product]
 
     for band_name in band_order:
         if band_name not in band_urls:
@@ -601,8 +375,8 @@ def main() -> None:
     # Validate inputs
     if not input_csv.exists():
         raise FileNotFoundError(f"Input CSV not found: {input_csv}")
-    if not SITES_SHAPEFILE.exists():
-        raise FileNotFoundError(f"Sites shapefile not found: {SITES_SHAPEFILE}")
+    if not hls_utils.SITES_SHAPEFILE.exists():
+        raise FileNotFoundError(f"Sites shapefile not found: {hls_utils.SITES_SHAPEFILE}")
 
     # Parse site filter
     site_filter = None
@@ -625,7 +399,7 @@ def main() -> None:
     print()
 
     # Configure GDAL for cloud access
-    configure_gdal_for_nasa()
+    hls_utils.configure_gdal_for_nasa()
 
     # Authenticate with NASA Earthdata
     print("Authenticating with NASA Earthdata...")
@@ -633,7 +407,7 @@ def main() -> None:
     print("[OK] Authentication successful\n")
 
     # Load site geometries
-    geom_gdf = load_site_geometries(SITES_SHAPEFILE, "SITE")
+    geom_gdf = hls_utils.load_site_geometries(hls_utils.SITES_SHAPEFILE, "SITE")
     geom_by_id = dict(
         zip(geom_gdf["SITE"].tolist(), geom_gdf.geometry.tolist())
     )

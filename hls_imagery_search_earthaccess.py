@@ -45,11 +45,10 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import logging
-import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 import pandas as pd
@@ -62,6 +61,9 @@ from tqdm import tqdm
 import requests
 
 import earthaccess
+
+# Import shared utilities
+import hls_utils
 
 # ============================================================================
 # Logging Configuration
@@ -82,38 +84,13 @@ if not logger.handlers:
 # Configuration Constants
 # ============================================================================
 
-# NASA CMR concept IDs for HLS collections in LP DAAC Cloud
-# These are used to query the Common Metadata Repository
-DEFAULT_CONCEPT_IDS = {
-    "L30": "C2021957657-LPCLOUD",  # HLSL30 v2.0 (Landsat OLI)
-    "S30": "C2021957295-LPCLOUD",  # HLSS30 v2.0 (Sentinel-2 MSI)
-}
-
-# First available date for each HLS product (for temporal filtering)
-DATASET_START_UTC = {
-    "L30": dt.datetime(2013, 4, 11, tzinfo=dt.timezone.utc),
-    "S30": dt.datetime(2015, 11, 28, tzinfo=dt.timezone.utc),
-}
-
 # Target date for imagery search (peak growing season in northern hemisphere)
 TARGET_MONTH = 6  # June
 TARGET_DAY = 20  # Approximate peak greenness
 
-# Both Landsat and Sentinel-2 HLS products to search
-PRODUCTS = ["L30", "S30"]
-
 # Maximum number of granules to retrieve per CMR query
 # Prevents overloading the API and excessive processing time
 MAX_GRANULES = 200
-
-# Sites Excel and geometry paths (hard-coded)
-SITES_EXCEL = Path("data/sites_2025.11.20.xlsx")
-SITES_SHAPEFILE = Path(
-    "data/sites_v2024-08-02-20251027T153209Z-1-001/sites_v2024-08-02/sites_all_polygons.shp"
-)
-
-# Cache directory for downloaded Fmask files
-CACHE_DIR = Path(".cache_hls")
 
 
 @dataclass(frozen=True)
@@ -125,98 +102,6 @@ class Candidate:
     start_time_utc: dt.datetime  # acquisition time start
     abs_days_from_target: int  # |days| from target date
     data_links: List[str]  # candidate file links
-
-
-def _as_dict(obj: Any) -> Dict[str, Any]:
-    """Best-effort conversion of an earthaccess DataGranule to a dict."""
-    if obj is None:
-        return {}
-    if isinstance(obj, dict):
-        return obj
-    for attr in ("data", "umm"):
-        if hasattr(obj, attr):
-            val = getattr(obj, attr)
-            if isinstance(val, dict):
-                return {attr: val} if attr == "umm" else val
-    for meth in ("model_dump", "dict", "to_dict"):
-        if hasattr(obj, meth) and callable(getattr(obj, meth)):
-            try:
-                d = getattr(obj, meth)()
-                return d if isinstance(d, dict) else {}
-            except Exception:
-                pass
-    return {}
-
-
-def granule_id(gr: Any) -> str:
-    """Extract granule identifier."""
-    d = _as_dict(gr)
-    ur = (
-        d.get("umm", {}).get("GranuleUR")
-        or d.get("umm", {}).get("GranuleURs", [None])[0]
-    )
-    if ur:
-        return str(ur)
-    for k in ("title", "granule_ur", "id", "name"):
-        if k in d and d[k]:
-            return str(d[k])
-    return "UNKNOWN_GRANULE"
-
-
-def granule_start_time_utc(gr: Any) -> Optional[dt.datetime]:
-    """Extract granule start time (UTC)."""
-    d = _as_dict(gr)
-    for k in (
-        "time_start",
-        "start_time",
-        "beginningDateTime",
-        "BeginningDateTime",
-    ):
-        v = d.get(k)
-        if v:
-            try:
-                return dt.datetime.fromisoformat(
-                    str(v).replace("Z", "+00:00")
-                ).astimezone(dt.timezone.utc)
-            except Exception:
-                pass
-    umm = d.get("umm", {})
-    try:
-        v = umm["TemporalExtent"]["RangeDateTime"]["BeginningDateTime"]
-        return dt.datetime.fromisoformat(
-            str(v).replace("Z", "+00:00")
-        ).astimezone(dt.timezone.utc)
-    except Exception:
-        pass
-    return None
-
-
-def granule_data_links(gr: Any) -> List[str]:
-    """Return URLs to files for the granule."""
-    if hasattr(gr, "data_links") and callable(getattr(gr, "data_links")):
-        try:
-            links = gr.data_links()
-            return list(links) if links else []
-        except Exception:
-            pass
-    d = _as_dict(gr)
-    links = d.get("links") or d.get("Links") or []
-    out = []
-    for link in links:
-        if isinstance(link, dict) and link.get("href"):
-            out.append(link["href"])
-        elif isinstance(link, str):
-            out.append(link)
-    return out
-
-
-def pick_fmask_url(links: Sequence[str]) -> Optional[str]:
-    """Choose the Fmask file URL from a list of granule file links."""
-    tif_links = [u for u in links if ".tif" in u.lower()]
-    fmask = [u for u in tif_links if "fmask" in u.lower()]
-    if fmask:
-        return fmask[0]
-    return tif_links[0] if tif_links else None
 
 
 def fmask_cloud_stats(
@@ -453,7 +338,7 @@ def search_candidates(
     Returns:
         List of Candidate objects with metadata
     """
-    if temporal[1] < DATASET_START_UTC[product]:
+    if temporal[1] < hls_utils.DATASET_START_UTC[product]:
         logger.debug(f"Search end date before {product} dataset start")
         return []
 
@@ -479,13 +364,13 @@ def search_candidates(
 
     out: List[Candidate] = []
     for gr in granules:
-        gid = granule_id(gr)
-        gtime = granule_start_time_utc(gr)
+        gid = hls_utils.granule_id(gr)
+        gtime = hls_utils.granule_start_time_utc(gr)
         if gtime is None:
             logger.warning(f"Could not extract start time for granule {gid}")
             continue
 
-        links = granule_data_links(gr)
+        links = hls_utils.granule_data_links(gr)
         out.append(
             Candidate(
                 product=product,
@@ -547,8 +432,8 @@ def choose_best_for_site_year(
     # Step 3: Query NASA CMR for both Landsat and Sentinel-2 granules
     # -------------------------------------------------------------------------
     candidates: List[Candidate] = []
-    for prod in PRODUCTS:
-        concept_id = DEFAULT_CONCEPT_IDS[prod]
+    for prod in hls_utils.PRODUCTS:
+        concept_id = hls_utils.DEFAULT_CONCEPT_IDS[prod]
         cands = search_candidates(
             concept_id=concept_id,
             product=prod,
@@ -591,14 +476,14 @@ def choose_best_for_site_year(
 
     for cand in candidates:
         # Extract Fmask file URL from granule's data links
-        fmask_url = pick_fmask_url(cand.data_links)
+        fmask_url = hls_utils.pick_fmask_url(cand.data_links)
         if not fmask_url:
             continue
 
         # Create a filesystem-safe filename for caching
         safe_gid = re.sub(r"[^A-Za-z0-9._-]+", "_", cand.granule_id)
         fmask_path = (
-            CACHE_DIR / "fmask" / cand.product / f"{safe_gid}_Fmask.tif"
+            hls_utils.CACHE_DIR / "fmask" / cand.product / f"{safe_gid}_Fmask.tif"
         )
 
         try:
@@ -735,25 +620,6 @@ def load_sites_excel(path: Path, id_col: str) -> pd.DataFrame:
     return df
 
 
-def load_site_geometries(path: Path, id_col: str) -> gpd.GeoDataFrame:
-    """Load site geometries and fix invalid ones."""
-    gdf = gpd.read_file(path)
-    if id_col not in gdf.columns:
-        raise ValueError(
-            f"Geometry file is missing required id column '{id_col}'. Columns: {list(gdf.columns)}"
-        )
-
-    # Fix invalid geometries with buffer(0)
-    gdf["geometry"] = gdf["geometry"].apply(
-        lambda g: g.buffer(0) if g and not g.is_valid else g
-    )
-
-    # Dissolve/union by site id
-    gdf = gdf[[id_col, "geometry"]].dropna(subset=["geometry"]).copy()
-    dissolved = gdf.dissolve(by=id_col, as_index=False)
-    return dissolved
-
-
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description="Search HLS v2 data via earthaccess and compute site-specific cloud% from Fmask."
@@ -860,13 +726,13 @@ def main() -> None:
     # Validate input files before starting
     # =========================================================================
     logger.info("Validating input files...")
-    if not SITES_EXCEL.exists():
+    if not hls_utils.SITES_EXCEL.exists():
         raise FileNotFoundError(
-            f"Sites Excel file not found: {SITES_EXCEL.resolve()}"
+            f"Sites Excel file not found: {hls_utils.SITES_EXCEL.resolve()}"
         )
-    if not SITES_SHAPEFILE.exists():
+    if not hls_utils.SITES_SHAPEFILE.exists():
         raise FileNotFoundError(
-            f"Sites shapefile not found: {SITES_SHAPEFILE.resolve()}"
+            f"Sites shapefile not found: {hls_utils.SITES_SHAPEFILE.resolve()}"
         )
 
     # Check for netrc file (required for NASA Earthdata authentication)
@@ -921,8 +787,8 @@ def main() -> None:
     # Step 2: Load site data and geometries
     # =========================================================================
     print("Step 2: Loading site data and geometries...")
-    sites_df = load_sites_excel(SITES_EXCEL, "site_id")
-    geom_gdf = load_site_geometries(SITES_SHAPEFILE, "SITE")
+    sites_df = load_sites_excel(hls_utils.SITES_EXCEL, "site_id")
+    geom_gdf = hls_utils.load_site_geometries(hls_utils.SITES_SHAPEFILE, "SITE")
     print(f"[OK] Loaded {len(sites_df)} sites from Excel")
     print(f"[OK] Loaded {len(geom_gdf)} site geometries from shapefile\n")
 
