@@ -1,8 +1,24 @@
 # Environment variables
 .env
 
+# Authentication and credentials
+.dodsrc
+cookies.*
+_netrc
+.netrc
+.urs_cookies
+
 # data directory
 data/
+
+# output directory
+output/
+
+# any caches
+.cache*/
+
+# claude
+.claude/
 
 # arcpro
 isabel-bird-arcpro/
