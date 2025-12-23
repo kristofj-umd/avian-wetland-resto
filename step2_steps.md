@@ -1,4 +1,15 @@
-# Step 2: Restoration Site Image Classification
+# Step 2: Restoration Site Image Classification Workflow
+
+This document outlines the steps to quantify the amount of emergent vegetation for a single multispectral image.
+
+The threshold values that you use in this workflow should be the same ones applied to all sites. These are:
+
+- NDVI
+- NDMI
+- Distance to water (emergent veg)
+- Distance to water (riparian)
+
+See [the appendix on thresholds](step2_thresholds) for a discussion of how to choose these threshold values.
 
 ## 1. Prep & band mapping
 
@@ -89,9 +100,9 @@ No matter which approach you took above to creating a water raster, we now need 
 - Output result:
 
   - **Water pixels** have a value of 1
-  - **Non-water pixels** are **NoData** ([ArcGIS Pro][4])
+  - **Non-water pixels** are **NoData**
 
-> Set Null behavior: when the condition is true (VALUE=0), output becomes NoData; otherwise it returns the false raster/constant. ([ArcGIS Pro][4])
+> Set Null behavior: when the condition is true (VALUE=0), output becomes NoData; otherwise it returns the false raster/constant.
 
 🤓Pro Tip: (Optional) Right-click any result layer → **Data** → [**Export Raster**](https://pro.arcgis.com/en/pro-app/latest/help/data/imagery/export-or-convert-raster-datasets.htm) to save a permanent version of it for later tools. ([ArcGIS Pro][7])
 
@@ -105,21 +116,12 @@ No matter which approach you took above to creating a water raster, we now need 
 
 ## 5. Make vegetation and moisture masks
 
-### 5.1. Vegetation mask
+Use raster calculator and the thresholds you have selected to make **vegetation** and **moisture** masks.
 
-Apply **Binary Thresholding** to your NDVI raster to create a 0/1 **Veg** mask.
+- Use **Raster Calculator** (Analysis → Tools → Spatial Analyst → [**Raster Calculator**](https://pro.arcgis.com/en/pro-app/latest/tool-reference/spatial-analyst/raster-calculator.htm)) with a simple expression like `NDMI > threshold` to create the soil moisture mask.
+- Do the same to create a vegetation mask.
 
-### 5.2. Moisture mask
-
-Either
-
-- Use **Binary Thresholding** on NDMI (automatic)
-
-`-OR-`
-
-- Use **Raster Calculator** (Analysis → Tools → Spatial Analyst → [**Raster Calculator**](https://pro.arcgis.com/en/pro-app/latest/tool-reference/spatial-analyst/raster-calculator.htm)) with a simple expression like `NDMI > 0.05` to create **Moist = 1/0**. ([ArcGIS Pro][9])
-
-## 6. Build an **emergent vegetation** mask with a simple rule
+## 6. Build an **emergent vegetation** mask
 
 - Open **Raster Calculator** and use a conditional expression to combine masks:
 
@@ -128,7 +130,6 @@ Either
     - Change the `60` to whatever distance you decide to use for this study.
 
 - (Optional) Build a **riparian** mask the same way (e.g., `Con(EucDist <= 120, 1, 0)`
-  - you can AND with moisture if you want “riparian-vegetated”).
 
 > By using the **Con** function, the output of this tool will be another 0/1 mask indicating 1=emergent veg, 0=anything else.
 
@@ -140,7 +141,7 @@ Segmentation is worth considering because with 30 m pixels, pixel-by-pixel thres
 
 Combine your index rasters (NDVI, MNDWI, NDMI) into a 3-band stack
 
-- [**Composite Bands**](https://pro.arcgis.com/en/pro-app/latest/help/analysis/raster-functions/composite-bands-function.htm)
+- use the [**Composite Bands**](https://pro.arcgis.com/en/pro-app/latest/help/analysis/raster-functions/composite-bands-function.htm) tool for this step.
 
 ### 7.2. Segment the stack into objects
 
@@ -148,7 +149,7 @@ Goal: build a segmented raster where each region represents a different combinat
 
 Tool: [**Segment Mean Shift**](https://pro.arcgis.com/en/pro-app/latest/tool-reference/spatial-analyst/segment-mean-shift.htm)
 
-**How Mean Shift segmentation works (basic mental model)**
+**How Mean Shift segmentation works**
 
 - It groups pixels that are:
 
@@ -206,26 +207,13 @@ But it’s worth knowing the trade-off:
 
 ## 8. Summarize area by wetland polygons
 
-- Ensure class rasters are integer **0/1**. If needed, recast with Raster Calculator (`Con(expr,1,0)`).
-- Run **Tabulate Area**: zones = your wetland polygons (zone field = polygon ID), class raster = each mask (Water, Emergent, Riparian).
+- Skipping detailed explanation here since you said you could handle this step on your own.
+- A couple of reminders/tips:
+  - symbolizing by unique values will force creation of a raster attribute table
+  - this can then be used to get the pixel count of emergent vegetation, etc.
+  - if getting an actual area value remember that the cell size of this imagery is 30m, so 900m2 in total area
 
-  - Tool: [**Tabulate Area**](https://pro.arcgis.com/en/pro-app/latest/tool-reference/spatial-analyst/tabulate-area.htm). ([ArcGIS Pro][15])
-
-- Convert cell counts to area (count × cell_area); add hectares/acres fields as needed. (See also “Working with Tabulate Area”.) ([ArcGIS Pro][16])
-
-[1]: https://pro.arcgis.com/en/pro-app/latest/tool-reference/environment-settings/cell-size.htm?utm_source=chatgpt.com "Cell Size (Environment setting)—ArcGIS Pro | Documentation"
-[2]: https://pro.arcgis.com/en/pro-app/latest/tool-reference/environment-settings/snap-raster.htm?utm_source=chatgpt.com "Snap Raster (Environment setting)—ArcGIS Pro"
-[3]: https://pro.arcgis.com/en/pro-app/latest/help/analysis/raster-functions/band-arithmetic-function.htm?utm_source=chatgpt.com "Band Arithmetic function—ArcGIS Pro | Documentation"
-[4]: https://pro.arcgis.com/en/pro-app/latest/help/analysis/raster-functions/ndvi-function.htm?utm_source=chatgpt.com "NDVI function—ArcGIS Pro | Documentation"
-[5]: https://pro.arcgis.com/en/pro-app/3.5/help/analysis/raster-functions/calculator-function.htm?utm_source=chatgpt.com "Calculator function—ArcGIS Pro | Documentation"
-[6]: https://pro.arcgis.com/en/pro-app/latest/help/analysis/raster-functions/binary-thresholding-function.htm?utm_source=chatgpt.com "Binary Thresholding function—ArcGIS Pro | Documentation"
-[7]: https://pro.arcgis.com/en/pro-app/latest/help/data/imagery/export-or-convert-raster-datasets.htm?utm_source=chatgpt.com "Export or convert raster datasets—ArcGIS Pro | Documentation"
-[8]: https://pro.arcgis.com/en/pro-app/latest/tool-reference/spatial-analyst/euclidean-distance.htm?utm_source=chatgpt.com "Euclidean Distance (Spatial Analyst) - ArcGIS Pro Resources"
-[9]: https://pro.arcgis.com/en/pro-app/latest/tool-reference/spatial-analyst/raster-calculator.htm?utm_source=chatgpt.com "Raster Calculator (Spatial Analyst) - ArcGIS Pro Resources"
-[10]: https://pro.arcgis.com/en/pro-app/latest/tool-reference/spatial-analyst/con-.htm?utm_source=chatgpt.com "Con (Spatial Analyst)—ArcGIS Pro | Documentation"
-[11]: https://pro.arcgis.com/en/pro-app/latest/help/analysis/raster-functions/composite-bands-function.htm?utm_source=chatgpt.com "Composite Bands function—ArcGIS Pro | Documentation"
-[12]: https://pro.arcgis.com/en/pro-app/latest/tool-reference/spatial-analyst/segment-mean-shift.htm?utm_source=chatgpt.com "Segment Mean Shift (Spatial Analyst)—ArcGIS Pro"
-[13]: https://pro.arcgis.com/en/pro-app/latest/tool-reference/spatial-analyst/zonal-statistics.htm?utm_source=chatgpt.com "Zonal Statistics (Spatial Analyst)—ArcGIS Pro | Documentation"
-[14]: https://pro.arcgis.com/en/pro-app/latest/tool-reference/spatial-analyst/majority-filter.htm?utm_source=chatgpt.com "Majority Filter (Spatial Analyst)—ArcGIS Pro | Documentation"
-[15]: https://pro.arcgis.com/en/pro-app/latest/tool-reference/spatial-analyst/tabulate-area.htm?utm_source=chatgpt.com "Tabulate Area (Spatial Analyst)—ArcGIS Pro | Documentation"
-[16]: https://pro.arcgis.com/en/pro-app/latest/tool-reference/spatial-analyst/h-working-with-tabulate-area.htm?utm_source=chatgpt.com "Working with Tabulate Area—ArcGIS Pro | Documentation"
+[3]: https://pro.arcgis.com/en/pro-app/latest/help/analysis/raster-functions/band-arithmetic-function.htm "Band Arithmetic function—ArcGIS Pro | Documentation"
+[7]: https://pro.arcgis.com/en/pro-app/latest/help/data/imagery/export-or-convert-raster-datasets.htm "Export or convert raster datasets—ArcGIS Pro | Documentation"
+[8]: https://pro.arcgis.com/en/pro-app/latest/tool-reference/spatial-analyst/euclidean-distance.htm "Euclidean Distance (Spatial Analyst) - ArcGIS Pro Resources"
+[9]: https://pro.arcgis.com/en/pro-app/latest/tool-reference/spatial-analyst/raster-calculator.htm "Raster Calculator (Spatial Analyst) - ArcGIS Pro Resources"
