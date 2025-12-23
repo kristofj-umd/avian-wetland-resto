@@ -16,6 +16,17 @@ Landcover and wetland data were summarized by a set of buffers surrounding bird 
 
 Wetland restoration sites that have undergone restoration are classified using satellite imagery to understand if changes have occurred in the amount of riparian area and emergent vegetation.
 
-- [satellite platform comparison](step2_notes.md)
-- [potential methods](step2_options.md)
-- [potential methods - simplified](step2_simpleoptions.md)
+#### WORKFLOW
+
+- [step-by-step instructions](step2_steps.md)
+- [thresholds appendix](step2_thresholds.md)
+
+#### CODE
+
+- [imagery search](hls_imagery_search_earthaccess.py)
+- [imagery viewer](hls_viewer_earthaccess.py)
+- [imagery download](hls_composite_export.py)
+
+#### METHODS
+
+(coming soon...)
