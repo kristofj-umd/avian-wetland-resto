@@ -45,10 +45,11 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import logging
+import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional
 
 import numpy as np
 import pandas as pd
@@ -483,7 +484,10 @@ def choose_best_for_site_year(
         # Create a filesystem-safe filename for caching
         safe_gid = re.sub(r"[^A-Za-z0-9._-]+", "_", cand.granule_id)
         fmask_path = (
-            hls_utils.CACHE_DIR / "fmask" / cand.product / f"{safe_gid}_Fmask.tif"
+            hls_utils.CACHE_DIR
+            / "fmask"
+            / cand.product
+            / f"{safe_gid}_Fmask.tif"
         )
 
         try:

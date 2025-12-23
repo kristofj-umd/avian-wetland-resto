@@ -39,16 +39,12 @@ from __future__ import annotations
 import argparse
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Dict, List, Tuple
 
-import numpy as np
 import pandas as pd
 import geopandas as gpd
-from osgeo import gdal  # Must import before rasterio on this system
-import rasterio
 import rioxarray as rxr
 import xarray as xr
-from shapely.geometry import mapping
 from tqdm import tqdm
 
 import earthaccess
