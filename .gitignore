@@ -22,6 +22,8 @@ output/
 
 # arcpro
 isabel-bird-arcpro/
+# QGIS project files
+*.qgz
 
 # Python files
 __pycache__/
