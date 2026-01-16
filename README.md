@@ -27,6 +27,4 @@ Wetland restoration sites that have undergone restoration are classified using s
 - [imagery viewer](hls_viewer_earthaccess.py)
 - [imagery download](hls_composite_export.py)
 
-#### METHODS
-
-(coming soon...)
+#### [METHODS](methodology_hls_imagery.md)
