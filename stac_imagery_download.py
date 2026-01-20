@@ -82,8 +82,8 @@ class STACSearchResult:
         """Date range of found items."""
         if not self.items:
             return None, None
-        dates = [
-            item.get("datetime") for item in self.items if item.get("datetime")
+        dates: List[dt.datetime] = [
+            item["datetime"] for item in self.items if item.get("datetime") is not None
         ]
         if not dates:
             return None, None
@@ -91,8 +91,8 @@ class STACSearchResult:
 
     def cloud_cover_stats(self) -> Dict[str, Optional[float]]:
         """Cloud cover statistics."""
-        cloud_covers = [
-            item.get("cloud_cover")
+        cloud_covers: List[float] = [
+            item["cloud_cover"]
             for item in self.items
             if item.get("cloud_cover") is not None
         ]
@@ -333,13 +333,14 @@ def display_search_items(
     rows = []
     for result in results:
         for item in result.items:
+            item_datetime = item.get("datetime")
             rows.append(
                 {
                     "AOI": result.aoi_id,
                     "Item ID": item.get("id", "N/A"),
                     "Date": (
-                        item.get("datetime").date()
-                        if item.get("datetime")
+                        item_datetime.date()
+                        if item_datetime is not None
                         else "N/A"
                     ),
                     "Cloud%": (
@@ -398,13 +399,14 @@ def export_results_csv(
     rows = []
     for result in results:
         for item in result.items:
+            item_datetime = item.get("datetime")
             rows.append(
                 {
                     "aoi_id": result.aoi_id,
                     "item_id": item.get("id"),
                     "datetime": (
-                        item.get("datetime").isoformat()
-                        if item.get("datetime")
+                        item_datetime.isoformat()
+                        if item_datetime is not None
                         else None
                     ),
                     "cloud_cover": item.get("cloud_cover"),
@@ -429,6 +431,7 @@ def export_results_geojson(
     features = []
     for result in results:
         for item in result.items:
+            item_datetime = item.get("datetime")
             features.append(
                 {
                     "type": "Feature",
@@ -437,8 +440,8 @@ def export_results_geojson(
                         "aoi_id": result.aoi_id,
                         "item_id": item.get("id"),
                         "datetime": (
-                            item.get("datetime").isoformat()
-                            if item.get("datetime")
+                            item_datetime.isoformat()
+                            if item_datetime is not None
                             else None
                         ),
                         "cloud_cover": item.get("cloud_cover"),
@@ -473,7 +476,7 @@ def load_and_clip_item(
     aoi_geom: Any,
     aoi_crs: Any,
     band_names: Optional[List[str]] = None,
-) -> xr.Dataset:
+) -> Optional[xr.Dataset]:
     """
     Load STAC item bands and clip to AOI geometry using stackstac.
 
@@ -499,50 +502,32 @@ def load_and_clip_item(
     # Get the EPSG code from the STAC item (use native projection)
     # Landsat data is typically in UTM projection
     item_epsg = None
-    if hasattr(stac_item, 'properties') and stac_item.properties:
-        proj_epsg = stac_item.properties.get('proj:epsg')
-        if proj_epsg:
-            item_epsg = int(proj_epsg)
 
-    # If no EPSG in item properties, try to read from first asset
-    if item_epsg is None and hasattr(stac_item, 'assets'):
-        # Try to get CRS from asset extra fields
-        for asset_key, asset in stac_item.assets.items():
-            if hasattr(asset, 'extra_fields') and asset.extra_fields:
-                if 'proj:epsg' in asset.extra_fields:
-                    item_epsg = int(asset.extra_fields['proj:epsg'])
-                    logger.debug(f"Found EPSG {item_epsg} in asset {asset_key}")
-                    break
-
-    # If still no EPSG found, read from actual raster
-    if item_epsg is None:
-        logger.debug(f"No proj:epsg found for item {stac_item.id}, will read from asset")
-        # Use rasterio to read CRS from first available asset
-        import rasterio
-        for asset_key in (band_names or list(stac_item.assets.keys())):
-            if asset_key in stac_item.assets:
-                asset_url = stac_item.assets[asset_key].href
-                try:
-                    with rasterio.open(asset_url) as src:
-                        if src.crs and src.crs.to_epsg():
-                            item_epsg = src.crs.to_epsg()
-                            logger.debug(f"Read EPSG {item_epsg} from asset {asset_key}")
-                            break
-                except Exception as e:
-                    logger.debug(f"Could not read CRS from {asset_key}: {e}")
-                    continue
+    if hasattr(stac_item, "properties") and stac_item.properties:
+        # try proj:cdode first, then proj:epsg
+        proj_code = stac_item.properties.get("proj:code")
+        if proj_code:
+            # Extract EPSG code from proj:code (e.g., "EPSG:32633")
+            item_epsg = int(proj_code.split(":")[1])
+        else:
+            proj_epsg = stac_item.properties.get("proj:epsg")
+            if proj_epsg:
+                item_epsg = int(proj_epsg)
 
     # Reproject AOI to match imagery CRS
     if item_epsg:
         aoi_native = aoi_gdf.to_crs(f"EPSG:{item_epsg}")
-    else:
-        # Fallback: assume WGS84 for bounds
-        logger.warning(f"Could not determine CRS for item {stac_item.id}, using WGS84")
-        aoi_native = aoi_gdf.to_crs("EPSG:4326")
-        item_epsg = 4326
 
-    # Get bounds in native CRS
-    bounds = aoi_native.total_bounds  # (minx, miny, maxx, maxy)
+    # if EPSG code not found, skip this item
+    else:
+        logger.warning(
+            f"Could not determine CRS for item {stac_item.id}, skipping"
+        )
+        return None
+
+    # Get bounds in native CRS as a 4-element tuple
+    minx, miny, maxx, maxy = aoi_native.total_bounds
+    bounds = (float(minx), float(miny), float(maxx), float(maxy))
 
     # Use stackstac to load the STAC item in its native CRS
     # This handles all GDAL configuration and cloud access automatically
@@ -552,8 +537,8 @@ def load_and_clip_item(
         epsg=item_epsg,  # Use native projection
         assets=band_names,  # Only load specified bands
         chunksize=512,
-        dtype="int16",
-        fill_value=0,
+        dtype=np.dtype("int16"),
+        fill_value=-9999,  # Standard nodata value for int16 satellite data
         rescale=False,  # Keep original integer values
     )
 
@@ -577,6 +562,7 @@ def apply_qa_mask(
     data: xr.DataArray,
     qa_data: xr.DataArray,
     mask_types: List[str],
+    nodata_value: int = -9999,
 ) -> xr.DataArray:
     """
     Apply quality mask to imagery data.
@@ -589,6 +575,8 @@ def apply_qa_mask(
         Quality assessment band data
     mask_types : list of str
         Bit types to mask (e.g., ['cloud', 'shadow'])
+    nodata_value : int
+        Value to use for masked pixels (default: -9999)
 
     Returns
     -------
@@ -610,7 +598,7 @@ def apply_qa_mask(
     if "clear-only" in mask_types:
         # Keep only clear pixels (bit 6 == 1)
         mask = ((qa_uint8 >> 6) & 1) == 1
-        data_masked = data.where(mask, other=np.nan)
+        data_masked = data.where(mask, other=nodata_value)
     else:
         # Mask specified bit types
         for mask_type in mask_types:
@@ -619,7 +607,7 @@ def apply_qa_mask(
                 type_mask = ((qa_uint8 >> bit_pos) & 1) == 1
                 mask = mask | type_mask
 
-        data_masked = data.where(~mask, other=np.nan)
+        data_masked = data.where(~mask, other=nodata_value)
 
     return data_masked
 
@@ -660,6 +648,9 @@ def stack_and_write_cog(
     ds = ds.rio.set_spatial_dims(x_dim="x", y_dim="y")
     if first_band.rio.transform() is not None:
         ds = ds.rio.write_transform(first_band.rio.transform())
+
+    # Set nodata value
+    ds = ds.rio.write_nodata(-9999)
 
     # Set attributes
     ds.attrs["scale_factor"] = 0.0001  # Landsat scale factor
@@ -867,9 +858,11 @@ def main() -> None:
                 aoi_crs="EPSG:4326",
                 items=[],
             )
+            # Only pass temporal if both dates are provided
+            temporal = (start_date, end_date) if start_date and end_date else None
             items = stac_utils.search_stac_collection(
                 collection_url=args.collection,
-                temporal=(start_date, end_date),
+                temporal=temporal,
                 cloud_cover_max=args.cloud_cover,
             )
             result.items = [stac_utils.parse_stac_item(item) for item in items]
@@ -958,8 +951,12 @@ def main() -> None:
                 try:
                     # Filter sample_bands to only include spectral bands (exclude QA)
                     spectral_bands = [
-                        b for b in sample_bands
-                        if not any(pattern in b.lower() for pattern in ["qa", "quality", "pixel_qa"])
+                        b
+                        for b in sample_bands
+                        if not any(
+                            pattern in b.lower()
+                            for pattern in ["qa", "quality", "pixel_qa"]
+                        )
                     ]
 
                     dataset = load_and_clip_item(
@@ -969,10 +966,20 @@ def main() -> None:
                         band_names=spectral_bands if spectral_bands else None,
                     )
 
-                    # Convert dataset to dictionary of DataArrays for compatibility
-                    clipped_bands = {str(var): dataset[var] for var in dataset.data_vars}
+                    # Check if loading failed (returns None when CRS not found)
+                    if dataset is None:
+                        logger.warning(f"Skipped item {item_id}: CRS not found")
+                        failed_count += 1
+                        continue
 
-                    logger.debug(f"Loaded {len(clipped_bands)} bands for item {item_id}")
+                    # Convert dataset to dictionary of DataArrays for compatibility
+                    clipped_bands = {
+                        str(var): dataset[var] for var in dataset.data_vars
+                    }
+
+                    logger.debug(
+                        f"Loaded {len(clipped_bands)} bands for item {item_id}"
+                    )
 
                 except Exception as e:
                     logger.warning(f"Failed to load/clip item {item_id}: {e}")
@@ -994,6 +1001,11 @@ def main() -> None:
                             aoi_crs=result.aoi_crs,
                             band_names=["qa_pixel"],  # Landsat QA band name
                         )
+
+                        # Check if QA loading succeeded
+                        if qa_dataset is None:
+                            logger.warning(f"Failed to load QA band for {item_id}")
+                            continue
 
                         # Get QA data array
                         qa_data = next(iter(qa_dataset.data_vars.values()))
