@@ -20,6 +20,9 @@ output/
 # claude
 .claude/
 
+# vscode settings
+.vscode/
+
 # arcpro
 isabel-bird-arcpro/
 # QGIS project files
