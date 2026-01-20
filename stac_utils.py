@@ -23,11 +23,10 @@ import datetime as dt
 import logging
 import re
 from typing import Any, Dict, List, Optional, Tuple
-from urllib.parse import urlparse
 
 import requests
 from pystac_client import Client
-from pystac import Item, Collection
+from pystac import Item
 
 # ============================================================================
 # Logging Configuration
@@ -46,7 +45,7 @@ def search_stac_collection(
     temporal: Optional[Tuple[dt.datetime, dt.datetime]] = None,
     cloud_cover_max: Optional[float] = None,
     max_items: int = 1000,
-    intersects: Optional[Dict] = None,
+    intersects: Optional[Dict[str, Any]] = None,
 ) -> List[Item]:
     """
     Search a STAC collection for items matching spatial and temporal criteria.
@@ -89,18 +88,29 @@ def search_stac_collection(
     >>> print(f"Found {len(items)} items")
     """
     try:
-        # Open STAC catalog
-        logger.debug(f"Connecting to STAC catalog: {collection_url}")
-        catalog = Client.open(collection_url)
+        # Determine catalog URL and collection ID
+        # If URL points to a collection endpoint, extract both parts
+        if "/collections/" in collection_url:
+            catalog_url = collection_url.split("/collections/")[0]
+            collection_id = _extract_collection_id(collection_url)
+            logger.debug(f"Extracted catalog URL: {catalog_url}")
+            logger.debug(f"Extracted collection ID: {collection_id}")
+        else:
+            # Assume URL is the catalog root
+            catalog_url = collection_url
+            collection_id = None
+            logger.debug(f"Using catalog URL: {catalog_url}")
 
-        # Extract collection ID from URL if it's a collection endpoint
-        collection_id = _extract_collection_id(collection_url)
+        # Open STAC catalog
+        logger.debug(f"Connecting to STAC catalog: {catalog_url}")
+        catalog = Client.open(catalog_url)
 
         # Build search parameters
         search_params = {}
 
         if collection_id:
             search_params["collections"] = [collection_id]
+            logger.debug(f"Filtering to collection: {collection_id}")
 
         if bbox is not None:
             search_params["bbox"] = bbox

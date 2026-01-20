@@ -29,7 +29,6 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import logging
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -37,12 +36,13 @@ from typing import Any, Dict, List, Optional
 import geopandas as gpd
 import numpy as np
 import pandas as pd
+from osgeo import gdal  # noqa: F401 necessary for rioxarray to import correctly
 import rioxarray as rxr
+import stackstac
 import xarray as xr
-from shapely.geometry import mapping, box
+from shapely.geometry import box
 from tqdm import tqdm
 
-import hls_utils
 import stac_utils
 
 # ============================================================================
@@ -72,6 +72,7 @@ class STACSearchResult:
     aoi_geometry: Any
     aoi_crs: Any
     items: List[Dict[str, Any]]  # Parsed STAC items
+    stac_items: Optional[List[Any]] = None  # Original pystac.Item objects
 
     def count(self) -> int:
         """Total number of items found."""
@@ -81,12 +82,14 @@ class STACSearchResult:
         """Date range of found items."""
         if not self.items:
             return None, None
-        dates = [item.get("datetime") for item in self.items if item.get("datetime")]
+        dates = [
+            item.get("datetime") for item in self.items if item.get("datetime")
+        ]
         if not dates:
             return None, None
         return min(dates), max(dates)
 
-    def cloud_cover_stats(self) -> Dict[str, float]:
+    def cloud_cover_stats(self) -> Dict[str, Optional[float]]:
         """Cloud cover statistics."""
         cloud_covers = [
             item.get("cloud_cover")
@@ -173,7 +176,8 @@ def load_aoi_geometries(
 
 
 def search_for_aoi(
-    aoi_feature: gpd.Series,
+    aoi_feature: pd.Series,
+    aoi_crs: Any,
     collection_url: str,
     start_date: Optional[dt.datetime] = None,
     end_date: Optional[dt.datetime] = None,
@@ -184,8 +188,10 @@ def search_for_aoi(
 
     Parameters
     ----------
-    aoi_feature : GeoSeries
+    aoi_feature : pd.Series
         Single row from GeoDataFrame with geometry
+    aoi_crs : Any
+        Coordinate reference system of the AOI geometry
     collection_url : str
         STAC collection URL
     start_date : datetime, optional
@@ -202,10 +208,9 @@ def search_for_aoi(
     """
     aoi_id = aoi_feature.name if hasattr(aoi_feature, "name") else "unknown"
     geom = aoi_feature.geometry
-    crs = aoi_feature.index[0] if hasattr(aoi_feature.index, '__iter__') else None
 
     # Convert geometry to bbox in EPSG:4326
-    gdf_wgs84 = gpd.GeoSeries([geom], crs=aoi_feature.values[0].crs).to_crs("EPSG:4326")
+    gdf_wgs84 = gpd.GeoSeries([geom], crs=aoi_crs).to_crs("EPSG:4326")
     minx, miny, maxx, maxy = gdf_wgs84.total_bounds
     bbox = (float(minx), float(miny), float(maxx), float(maxy))
 
@@ -232,8 +237,9 @@ def search_for_aoi(
         return STACSearchResult(
             aoi_id=aoi_id,
             aoi_geometry=geom,
-            aoi_crs=aoi_feature.values[0].crs,
+            aoi_crs=aoi_crs,
             items=parsed_items,
+            stac_items=items,
         )
 
     except Exception as e:
@@ -241,8 +247,9 @@ def search_for_aoi(
         return STACSearchResult(
             aoi_id=aoi_id,
             aoi_geometry=geom,
-            aoi_crs=aoi_feature.values[0].crs,
+            aoi_crs=aoi_crs,
             items=[],
+            stac_items=[],
         )
 
 
@@ -306,7 +313,9 @@ def display_search_summary(results: List[STACSearchResult]) -> None:
     print("=" * 70)
 
 
-def display_search_items(results: List[STACSearchResult], max_rows: int = 50) -> None:
+def display_search_items(
+    results: List[STACSearchResult], max_rows: int = 50
+) -> None:
     """
     Display detailed table of found items.
 
@@ -328,9 +337,11 @@ def display_search_items(results: List[STACSearchResult], max_rows: int = 50) ->
                 {
                     "AOI": result.aoi_id,
                     "Item ID": item.get("id", "N/A"),
-                    "Date": item.get("datetime").date()
-                    if item.get("datetime")
-                    else "N/A",
+                    "Date": (
+                        item.get("datetime").date()
+                        if item.get("datetime")
+                        else "N/A"
+                    ),
                     "Cloud%": (
                         f"{item.get('cloud_cover'):.1f}"
                         if item.get("cloud_cover") is not None
@@ -391,9 +402,11 @@ def export_results_csv(
                 {
                     "aoi_id": result.aoi_id,
                     "item_id": item.get("id"),
-                    "datetime": item.get("datetime").isoformat()
-                    if item.get("datetime")
-                    else None,
+                    "datetime": (
+                        item.get("datetime").isoformat()
+                        if item.get("datetime")
+                        else None
+                    ),
                     "cloud_cover": item.get("cloud_cover"),
                     "bbox": str(item.get("bbox")),
                 }
@@ -455,55 +468,109 @@ def export_results_geojson(
 # ============================================================================
 
 
-def clip_band_to_aoi(
-    band_url: str,
+def load_and_clip_item(
+    stac_item: Any,
     aoi_geom: Any,
     aoi_crs: Any,
-    buffer_meters: float = 0,
-) -> xr.DataArray:
+    band_names: Optional[List[str]] = None,
+) -> xr.Dataset:
     """
-    Open band from STAC asset URL and clip to AOI geometry.
+    Load STAC item bands and clip to AOI geometry using stackstac.
 
     Parameters
     ----------
-    band_url : str
-        URL to COG band
+    stac_item : pystac.Item
+        STAC item with assets to load
     aoi_geom : Shapely geometry
         AOI polygon
     aoi_crs : str or CRS
         CRS of AOI geometry
-    buffer_meters : float
-        Buffer distance in meters
+    band_names : list of str, optional
+        Specific bands to load. If None, loads all available bands.
 
     Returns
     -------
-    xarray.DataArray
-        Clipped band data (int16, NOT scaled)
+    xarray.Dataset
+        Dataset with clipped bands
     """
-    # Configure GDAL for cloud access
-    hls_utils.configure_gdal_for_nasa()
+    # Convert AOI to GeoDataFrame
+    aoi_gdf = gpd.GeoDataFrame([{"geometry": aoi_geom}], crs=aoi_crs)
 
-    # Open band with rioxarray
-    band_da = rxr.open_rasterio(
-        band_url,
-        chunks={"band": 1, "x": 512, "y": 512},
-        masked=True,
+    # Get the EPSG code from the STAC item (use native projection)
+    # Landsat data is typically in UTM projection
+    item_epsg = None
+    if hasattr(stac_item, 'properties') and stac_item.properties:
+        proj_epsg = stac_item.properties.get('proj:epsg')
+        if proj_epsg:
+            item_epsg = int(proj_epsg)
+
+    # If no EPSG in item properties, try to read from first asset
+    if item_epsg is None and hasattr(stac_item, 'assets'):
+        # Try to get CRS from asset extra fields
+        for asset_key, asset in stac_item.assets.items():
+            if hasattr(asset, 'extra_fields') and asset.extra_fields:
+                if 'proj:epsg' in asset.extra_fields:
+                    item_epsg = int(asset.extra_fields['proj:epsg'])
+                    logger.debug(f"Found EPSG {item_epsg} in asset {asset_key}")
+                    break
+
+    # If still no EPSG found, read from actual raster
+    if item_epsg is None:
+        logger.debug(f"No proj:epsg found for item {stac_item.id}, will read from asset")
+        # Use rasterio to read CRS from first available asset
+        import rasterio
+        for asset_key in (band_names or list(stac_item.assets.keys())):
+            if asset_key in stac_item.assets:
+                asset_url = stac_item.assets[asset_key].href
+                try:
+                    with rasterio.open(asset_url) as src:
+                        if src.crs and src.crs.to_epsg():
+                            item_epsg = src.crs.to_epsg()
+                            logger.debug(f"Read EPSG {item_epsg} from asset {asset_key}")
+                            break
+                except Exception as e:
+                    logger.debug(f"Could not read CRS from {asset_key}: {e}")
+                    continue
+
+    # Reproject AOI to match imagery CRS
+    if item_epsg:
+        aoi_native = aoi_gdf.to_crs(f"EPSG:{item_epsg}")
+    else:
+        # Fallback: assume WGS84 for bounds
+        logger.warning(f"Could not determine CRS for item {stac_item.id}, using WGS84")
+        aoi_native = aoi_gdf.to_crs("EPSG:4326")
+        item_epsg = 4326
+
+    # Get bounds in native CRS
+    bounds = aoi_native.total_bounds  # (minx, miny, maxx, maxy)
+
+    # Use stackstac to load the STAC item in its native CRS
+    # This handles all GDAL configuration and cloud access automatically
+    stack = stackstac.stack(
+        [stac_item],
+        bounds=bounds,
+        epsg=item_epsg,  # Use native projection
+        assets=band_names,  # Only load specified bands
+        chunksize=512,
+        dtype="int16",
+        fill_value=0,
+        rescale=False,  # Keep original integer values
     )
-    band_da = band_da.squeeze("band", drop=True)
 
-    # Transform AOI to raster CRS
-    aoi_gdf = gpd.GeoSeries([aoi_geom], crs=aoi_crs)
-    aoi_utm = aoi_gdf.to_crs(band_da.rio.crs)
-    geom_utm = aoi_utm.iloc[0]
+    # Stack has dimensions: (time, band, y, x)
+    # Squeeze time dimension since we're loading single item
+    stack = stack.squeeze("time", drop=True)
 
-    # Apply buffer
-    if buffer_meters > 0:
-        geom_utm = geom_utm.buffer(buffer_meters)
+    # Get geometry list for clipping
+    geom_list = aoi_native["geometry"].tolist()
 
-    # Clip
-    clipped = band_da.rio.clip([geom_utm], band_da.rio.crs, all_touched=True)
+    # Clip to AOI geometry
+    clipped = stack.rio.clip(geom_list, crs=stack.rio.crs, all_touched=True)
 
-    return clipped
+    # Convert to dataset with bands as variables
+    ds = clipped.to_dataset(dim="band")
+
+    return ds
 
 
 def apply_qa_mask(
@@ -698,12 +765,6 @@ Examples:
         action="store_true",
         help="Create temporal median composite",
     )
-    parser.add_argument(
-        "--buffer-meters",
-        type=float,
-        default=0,
-        help="Buffer around AOI polygons (meters)",
-    )
 
     # Other options
     parser.add_argument(
@@ -776,23 +837,27 @@ def main() -> None:
     print("\nPhase 1: Searching for imagery...")
 
     # Load AOI if provided
+    aoi_crs = None
     if args.aoi:
         gdf = load_aoi_geometries(args.aoi, args.aoi_filter)
         aoi_features = list(gdf.iterrows())
+        aoi_crs = gdf.crs
     else:
         # Search without AOI
         aoi_features = [(0, pd.Series({"name": "global"}))]
+        aoi_crs = "EPSG:4326"
 
     # Search for each AOI feature
     all_results = []
     for idx, feature in tqdm(aoi_features, desc="Searching", unit="AOI"):
         if args.aoi:
             result = search_for_aoi(
-                feature,
-                args.collection,
-                start_date,
-                end_date,
-                args.cloud_cover,
+                aoi_feature=feature,
+                aoi_crs=aoi_crs,
+                collection_url=args.collection,
+                start_date=start_date,
+                end_date=end_date,
+                cloud_cover_max=args.cloud_cover,
             )
         else:
             # Global search (bounding box of world)
@@ -858,14 +923,16 @@ def main() -> None:
     failed_count = 0
 
     for result in all_results:
-        if not result.items:
+        if not result.items or not result.stac_items:
             continue
 
-        for item_dict in tqdm(
-            result.items,
+        # Iterate over both parsed and original STAC items together
+        for item_dict, stac_item in tqdm(
+            zip(result.items, result.stac_items),
             desc=f"Processing AOI {result.aoi_id}",
             unit="item",
             leave=False,
+            total=len(result.items),
         ):
             try:
                 item_id = item_dict.get("id")
@@ -887,15 +954,74 @@ def main() -> None:
                     success_count += 1
                     continue
 
-                # Get band URLs
-                if "assets" not in item_dict:
-                    logger.warning(f"No assets in item {item_id}")
+                # Load and clip all bands using stackstac
+                try:
+                    # Filter sample_bands to only include spectral bands (exclude QA)
+                    spectral_bands = [
+                        b for b in sample_bands
+                        if not any(pattern in b.lower() for pattern in ["qa", "quality", "pixel_qa"])
+                    ]
+
+                    dataset = load_and_clip_item(
+                        stac_item=stac_item,
+                        aoi_geom=result.aoi_geometry,
+                        aoi_crs=result.aoi_crs,
+                        band_names=spectral_bands if spectral_bands else None,
+                    )
+
+                    # Convert dataset to dictionary of DataArrays for compatibility
+                    clipped_bands = {str(var): dataset[var] for var in dataset.data_vars}
+
+                    logger.debug(f"Loaded {len(clipped_bands)} bands for item {item_id}")
+
+                except Exception as e:
+                    logger.warning(f"Failed to load/clip item {item_id}: {e}")
                     failed_count += 1
                     continue
 
-                # For now, we'll just note the structure
-                logger.info(f"Would download item {item_id} to {output_file}")
-                success_count += 1
+                if not clipped_bands:
+                    logger.warning(f"No bands clipped for item {item_id}")
+                    failed_count += 1
+                    continue
+
+                # Apply QA mask if requested
+                if args.mask:
+                    try:
+                        # Load QA band separately
+                        qa_dataset = load_and_clip_item(
+                            stac_item=stac_item,
+                            aoi_geom=result.aoi_geometry,
+                            aoi_crs=result.aoi_crs,
+                            band_names=["qa_pixel"],  # Landsat QA band name
+                        )
+
+                        # Get QA data array
+                        qa_data = next(iter(qa_dataset.data_vars.values()))
+                        mask_types = [m.strip() for m in args.mask.split(",")]
+
+                        # Apply mask to each band
+                        for band_name in clipped_bands:
+                            clipped_bands[band_name] = apply_qa_mask(
+                                clipped_bands[band_name],
+                                qa_data,
+                                mask_types,
+                            )
+                        logger.debug(f"Applied QA mask: {mask_types}")
+                    except Exception as e:
+                        logger.warning(f"Failed to apply QA mask: {e}")
+
+                # Write stacked COG
+                try:
+                    stack_and_write_cog(
+                        clipped_bands=clipped_bands,
+                        output_path=output_file,
+                        band_names=list(clipped_bands.keys()),
+                    )
+                    logger.info(f"✓ Downloaded {item_id} to {output_file.name}")
+                    success_count += 1
+                except Exception as e:
+                    logger.error(f"Failed to write COG for {item_id}: {e}")
+                    failed_count += 1
 
             except Exception as e:
                 logger.error(f"Failed to process item: {e}")
