@@ -203,6 +203,7 @@ from shapely.geometry import box
 from tqdm import tqdm
 
 import planetary_computer as pc
+from pystac_client import Client
 
 # ============================================================================
 # Warning Suppression
@@ -213,7 +214,6 @@ warnings.filterwarnings("ignore", category=DeprecationWarning)
 warnings.filterwarnings("ignore", message=".*Increasing number of chunks.*")
 warnings.filterwarnings("ignore", message=".*invalid value encountered.*")
 warnings.filterwarnings("ignore", message=".*All-NaN slice.*")
-from pystac_client import Client
 
 # ============================================================================
 # GDAL Configuration for Cloud Access
@@ -227,9 +227,6 @@ gdal.SetConfigOption("GDAL_HTTP_TIMEOUT", "300")
 gdal.SetConfigOption("GDAL_HTTP_MAX_RETRY", "3")
 gdal.SetConfigOption("CPL_VSIL_CURL_USE_HEAD", "NO")
 gdal.SetConfigOption("GDAL_HTTP_CONNECTTIMEOUT", "120")
-
-# S3 Configuration for requester-pays buckets (e.g., usgs-landsat)
-gdal.SetConfigOption("AWS_REQUEST_PAYER", "requester")
 
 # ============================================================================
 # Planetary Computer Configuration
