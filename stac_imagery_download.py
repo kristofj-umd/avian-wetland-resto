@@ -1560,35 +1560,39 @@ def main() -> None:
     # Phase 3: Download and Process
     # =========================================================================
     print("\nPhase 3: Downloading and processing imagery...")
+    print("-" * 70)
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
     success_count = 0
     failed_count = 0
+    skipped_count = 0
+
+    # Count total items and AOIs with data
+    aois_with_data = [r for r in all_results if r.items and r.stac_items]
+    total_aois = len(aois_with_data)
 
     # =========================================================================
     # Process each AOI
     # =========================================================================
-    for result in all_results:
-        if not result.items or not result.stac_items:
-            continue
-
+    for aoi_idx, result in enumerate(aois_with_data, 1):
         # Collect datasets and dates for this AOI
         aoi_datasets: List[xr.Dataset] = []
         item_dates: List[str] = []
 
-        # Process each item
-        desc = (
-            f"Loading items for AOI {result.aoi_id}"
-            if args.composite
-            else f"Processing AOI {result.aoi_id}"
-        )
+        # Print AOI header
+        mode_label = "composite" if args.composite else "individual files"
+        print(f"\n[AOI {aoi_idx}/{total_aois}] Processing AOI {result.aoi_id} "
+              f"({len(result.items)} items → {mode_label})")
+
+        # Process each item with progress bar
         for item_dict, stac_item in tqdm(
             zip(result.items, result.stac_items),
-            desc=desc,
-            unit="item",
-            leave=False,
+            desc="  Downloading",
+            unit="scene",
+            leave=True,
             total=len(result.items),
+            ncols=70,
         ):
             try:
                 item_id = item_dict.get("id")
@@ -1607,7 +1611,7 @@ def main() -> None:
                     )
                     if output_file.exists():
                         logger.debug(f"File already exists: {output_file}")
-                        success_count += 1
+                        skipped_count += 1
                         continue
 
                 # Process the item (load, clip, mask)
@@ -1647,18 +1651,19 @@ def main() -> None:
                             output_path=output_file,
                             band_names=list(clipped_bands.keys()),
                         )
-                        logger.info(f"✓ Downloaded {item_id} to {output_file.name}")
+                        logger.debug(f"Wrote {output_file.name}")
                         success_count += 1
                     except Exception as e:
-                        logger.error(f"Failed to write COG for {item_id}: {e}")
+                        tqdm.write(f"  ✗ Failed to write {item_id}: {e}")
                         failed_count += 1
 
             except Exception as e:
-                logger.error(f"Failed to process item: {e}")
+                tqdm.write(f"  ✗ Failed to process item: {e}")
                 failed_count += 1
 
         # Create composite if in composite mode
         if args.composite and aoi_datasets:
+            print(f"  Creating median composite from {len(aoi_datasets)} scenes...")
             try:
                 min_date = min(item_dates) if item_dates else "unknown"
                 max_date = max(item_dates) if item_dates else "unknown"
@@ -1666,9 +1671,8 @@ def main() -> None:
                 composite = create_temporal_composite(aoi_datasets, method="median")
 
                 if composite is None:
-                    logger.error(
-                        f"Failed to create composite for AOI {result.aoi_id}"
-                    )
+                    print(f"  ✗ Failed to create composite for AOI {result.aoi_id}")
+                    failed_count += 1
                     continue
 
                 output_file = (
@@ -1676,14 +1680,13 @@ def main() -> None:
                     / f"aoi{result.aoi_id}_{min_date}-{max_date}_composite.tif"
                 )
 
+                print(f"  Writing COG: {output_file.name}")
                 output_file.parent.mkdir(parents=True, exist_ok=True)
                 composite.rio.to_raster(str(output_file), driver="COG")
-                logger.info(
-                    f"✓ Created composite for AOI {result.aoi_id}: {output_file.name}"
-                )
+                print(f"  ✓ Composite saved: {output_file.name}")
 
             except Exception as e:
-                logger.error(f"Failed to create/write composite: {e}")
+                print(f"  ✗ Failed to create/write composite: {e}")
                 failed_count += 1
 
     # =========================================================================
@@ -1692,7 +1695,12 @@ def main() -> None:
     print("\n" + "=" * 70)
     print("DOWNLOAD COMPLETE")
     print("=" * 70)
-    print(f"Processed: {success_count} successful, {failed_count} failed")
+    print(f"  Successful: {success_count}")
+    if skipped_count > 0:
+        print(f"  Skipped (already exist): {skipped_count}")
+    if failed_count > 0:
+        print(f"  Failed: {failed_count}")
+    print(f"  Output directory: {args.output_dir.resolve()}")
     print("=" * 70)
 
 
