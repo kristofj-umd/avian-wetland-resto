@@ -1,27 +1,185 @@
 """
 stac_imagery_download.py
 
-Search, review, and download satellite imagery from STAC collections.
+Search, review, and download satellite imagery from Microsoft Planetary Computer
+using STAC (SpatioTemporal Asset Catalog) APIs.
 
-This script provides a unified workflow for:
-  1. Search: Query STAC collections with spatial/temporal/cloud cover filters
-  2. Review: Display search results and allow user to export or proceed
-  3. Download: Download imagery, optionally mask, clip to AOI, and composite
+Overview
+--------
+This script provides a unified workflow for acquiring satellite imagery:
 
-The script is generic and works with any STAC-compliant API endpoint. It includes
-support for interactive user review, CSV/GeoJSON export, temporal compositing, and
-pixel quality masking.
+  1. SEARCH: Query any STAC collection with spatial, temporal, and cloud cover filters
+  2. REVIEW: Display search results and optionally export to CSV/GeoJSON
+  3. DOWNLOAD: Download imagery, optionally mask clouds, clip to AOI, and composite
 
-Usage:
+The script supports any Planetary Computer collection with spectral bands (Landsat,
+Sentinel-2, NAIP, etc.). Band information, scale factors, and nodata values are
+derived dynamically from STAC metadata, making the script collection-agnostic.
+
+Parameters
+----------
+Required:
+
+  --output-dir PATH
+      Directory where output imagery will be saved. Created if it doesn't exist.
+      Individual scenes are saved as: aoi{id}_{date}_{item_id}.tif
+      Composites are saved as: aoi{id}_{start_date}-{end_date}_composite.tif
+
+Collection Configuration:
+
+  --collection ID
+      STAC collection identifier to search. Default: landsat-c2-l2
+      Common collections on Planetary Computer:
+        - landsat-c2-l2     : Landsat Collection 2 Level-2 (30m, 1982-present)
+        - sentinel-2-l2a    : Sentinel-2 Level-2A (10-60m, 2015-present)
+        - naip              : NAIP aerial imagery (0.6-1m, US only)
+        - cop-dem-glo-30    : Copernicus DEM (30m global)
+
+  --bands BAND1,BAND2,...
+      Comma-separated list of band names to download. If omitted, all spectral
+      bands (assets with eo:bands metadata) are downloaded.
+
+      Landsat examples: coastal,blue,green,red,nir08,swir16,swir22,lwir11
+      Sentinel-2 examples: B02,B03,B04,B05,B06,B07,B08,B8A,B11,B12
+
+  --qa-band NAME
+      Name of the quality assessment band used for cloud/shadow masking.
+      Default: qa_pixel (Landsat). For Sentinel-2, use: SCL
+
+      If --mask is specified but the QA band is not found in the collection,
+      the script will exit with an error listing available assets.
+
+Search Filters:
+
+  --aoi PATH
+      Path to area of interest file (GeoJSON, Shapefile, GeoPackage, etc.).
+      The AOI defines the spatial extent for the STAC search and is used to
+      clip output imagery. Supports any format readable by GeoPandas.
+
+      Multi-feature AOIs are processed independently - each feature gets its
+      own search results and output files.
+
+  --aoi-filter COLUMN:VALUE1,VALUE2
+      Filter AOI features by attribute values before processing.
+      Format: column_name:value1,value2,...
+
+      Example: --aoi-filter site_id:A1,A2,B3
+      This would only process features where site_id is A1, A2, or B3.
+
+  --start-date YYYY-MM-DD
+      Beginning of temporal search window (inclusive). Required for most
+      collections to limit search results.
+
+  --end-date YYYY-MM-DD
+      End of temporal search window (inclusive). If omitted with --start-date,
+      searches from start date to present.
+
+  --cloud-cover PERCENT
+      Maximum cloud cover percentage (0-100). Scenes with cloud cover above
+      this threshold are excluded from search results.
+      Example: --cloud-cover 20 excludes scenes with >20% clouds.
+
+Processing Options:
+
+  --mask SPEC
+      Apply quality masking to remove clouds, shadows, or other artifacts.
+      Uses the QA band specified by --qa-band.
+
+      Mask specifications:
+        clear-only      : Keep only pixels flagged as clear (most restrictive)
+        cloud           : Mask cloud pixels
+        shadow          : Mask cloud shadow pixels
+        cirrus          : Mask cirrus cloud pixels
+        cloud,shadow    : Mask both clouds and shadows (comma-separated)
+
+      Masked pixels are set to NaN in the output.
+
+  --composite
+      Create a temporal composite instead of individual scene files.
+      All scenes for each AOI are stacked and reduced using median aggregation.
+      This is effective for removing residual clouds when combined with --mask.
+
+      Output: Single file per AOI spanning the full date range.
+      Without --composite: One file per scene per AOI.
+
+  --rescale
+      Convert raw digital numbers (DN) to physical units (surface reflectance
+      or temperature) using scale/offset values from STAC raster:bands metadata.
+
+      Without --rescale: Output contains raw DN values (integers).
+      With --rescale: Output contains scaled float values.
+
+      Note: Scale factors are read per-band from metadata, so thermal and
+      reflectance bands are scaled correctly with their respective factors.
+
+Logging and Automation:
+
+  --log-file
+      Write log messages to a file in the output directory.
+      File: {output-dir}/stac_imagery_download.log
+
+  --log-level LEVEL
+      Set logging verbosity. Choices: DEBUG, INFO, WARNING, ERROR
+      Default: INFO
+
+      DEBUG includes detailed band-by-band processing information.
+
+  -y, --yes
+      Skip the interactive review prompt and proceed directly to download.
+      Useful for scripted/automated workflows.
+
+Output Format
+-------------
+All outputs are Cloud Optimized GeoTIFFs (COG) in the native CRS of the imagery
+(typically UTM for Landsat/Sentinel-2). Each output contains all requested
+spectral bands as separate layers.
+
+Examples
+--------
+Basic Landsat search and download:
+
   python stac_imagery_download.py \\
-    --collection <stac_url> \\
-    --output-dir <output_path> \\
-    --aoi <aoi_file> \\
-    --start-date 2020-06-01 \\
-    --end-date 2020-08-31 \\
-    --cloud-cover 20 \\
-    --mask cloud,shadow \\
-    --composite
+    --output-dir ./landsat_output \\
+    --aoi study_sites.geojson \\
+    --start-date 2023-06-01 \\
+    --end-date 2023-08-31 \\
+    --cloud-cover 20
+
+Cloud-masked temporal composite:
+
+  python stac_imagery_download.py \\
+    --output-dir ./composites \\
+    --aoi study_sites.geojson \\
+    --start-date 2023-06-01 \\
+    --end-date 2023-08-31 \\
+    --cloud-cover 30 \\
+    --mask clear-only \\
+    --composite \\
+    --rescale \\
+    --yes
+
+Sentinel-2 with specific bands:
+
+  python stac_imagery_download.py \\
+    --collection sentinel-2-l2a \\
+    --bands B02,B03,B04,B08 \\
+    --qa-band SCL \\
+    --output-dir ./sentinel_output \\
+    --aoi study_sites.geojson \\
+    --start-date 2023-06-01 \\
+    --end-date 2023-08-31 \\
+    --cloud-cover 15 \\
+    --mask cloud,shadow
+
+Filter AOI to specific sites:
+
+  python stac_imagery_download.py \\
+    --output-dir ./output \\
+    --aoi all_sites.shp \\
+    --aoi-filter region:north,south \\
+    --start-date 2023-01-01 \\
+    --end-date 2023-12-31 \\
+    --cloud-cover 25
 """
 
 from __future__ import annotations
@@ -43,17 +201,52 @@ import xarray as xr
 from shapely.geometry import box
 from tqdm import tqdm
 
-import stac_utils
+import planetary_computer as pc
+from pystac_client import Client
+
+# ============================================================================
+# GDAL Configuration for Cloud Access
+# ============================================================================
+# Configure GDAL to properly access remote files over HTTP
+gdal.SetConfigOption("GDAL_DISABLE_READDIR_ON_OPEN", "EMPTY_DIR")
+gdal.SetConfigOption(
+    "CPL_VSIL_CURL_ALLOWED_EXTENSIONS", ".tif,.TIF,.tiff,.TIFF"
+)
+gdal.SetConfigOption("GDAL_HTTP_TIMEOUT", "300")
+gdal.SetConfigOption("GDAL_HTTP_MAX_RETRY", "3")
+gdal.SetConfigOption("CPL_VSIL_CURL_USE_HEAD", "NO")
+gdal.SetConfigOption("GDAL_HTTP_CONNECTTIMEOUT", "120")
+
+# S3 Configuration for requester-pays buckets (e.g., usgs-landsat)
+gdal.SetConfigOption("AWS_REQUEST_PAYER", "requester")
+
+# ============================================================================
+# Planetary Computer Configuration
+# ============================================================================
+# Minimal constants - most configuration is now derived from STAC metadata
+# or provided via CLI parameters.
+
+# Planetary Computer API endpoint
+PC_CATALOG_URL = "https://planetarycomputer.microsoft.com/api/stac/v1"
+
+# Default collection (can be overridden via --collection)
+DEFAULT_COLLECTION_ID = "landsat-c2-l2"
+
+# Default QA band name (can be overridden via --qa-band)
+DEFAULT_QA_BAND = "qa_pixel"
+
+# Cloud cover property name in STAC metadata (standard STAC extension)
+CLOUD_COVER_PROPERTY = "eo:cloud_cover"
 
 # ============================================================================
 # Logging Configuration
 # ============================================================================
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
+logger.setLevel(logging.DEBUG)  # Allow all levels; handler controls output
 
 if not logger.handlers:
     handler = logging.StreamHandler()
-    handler.setLevel(logging.DEBUG)
+    handler.setLevel(logging.INFO)  # Default to INFO; DEBUG via --log-level
     formatter = logging.Formatter("[%(levelname)s] %(funcName)s: %(message)s")
     handler.setFormatter(formatter)
     logger.addHandler(handler)
@@ -83,7 +276,9 @@ class STACSearchResult:
         if not self.items:
             return None, None
         dates: List[dt.datetime] = [
-            item["datetime"] for item in self.items if item.get("datetime") is not None
+            item["datetime"]
+            for item in self.items
+            if item.get("datetime") is not None
         ]
         if not dates:
             return None, None
@@ -103,6 +298,162 @@ class STACSearchResult:
             "mean": float(np.mean(cloud_covers)),
             "max": float(np.max(cloud_covers)),
         }
+
+
+# ============================================================================
+# Collection Metadata Functions
+# ============================================================================
+
+
+@dataclass
+class CollectionInfo:
+    """Metadata derived from a STAC collection."""
+
+    collection_id: str
+    title: str
+    spectral_bands: List[str]  # Asset names with eo:bands
+    all_assets: List[str]  # All available asset names
+    qa_band: Optional[str]  # Validated QA band name (or None if not found)
+
+
+def get_collection_info(
+    collection_id: str,
+    qa_band_name: str = DEFAULT_QA_BAND,
+    band_subset: Optional[List[str]] = None,
+) -> CollectionInfo:
+    """
+    Fetch collection metadata and derive spectral bands.
+
+    Connects to Planetary Computer catalog and extracts:
+    - Collection title
+    - Available spectral bands (assets with eo:bands extension)
+    - Validates QA band exists
+
+    Parameters
+    ----------
+    collection_id : str
+        STAC collection ID to fetch
+    qa_band_name : str
+        Name of QA band to look for (default: qa_pixel)
+    band_subset : list of str, optional
+        If provided, filter spectral bands to only these names
+
+    Returns
+    -------
+    CollectionInfo
+        Dataclass with collection metadata
+
+    Raises
+    ------
+    ValueError
+        If collection not found
+    """
+    logger.info(f"Fetching collection metadata for '{collection_id}'")
+
+    catalog = Client.open(PC_CATALOG_URL)
+    collection = catalog.get_collection(collection_id)
+
+    if collection is None:
+        raise ValueError(f"Collection '{collection_id}' not found at {PC_CATALOG_URL}")
+
+    # Get collection title
+    title = collection.title or collection_id
+
+    # Extract item_assets from collection metadata
+    item_assets = collection.extra_fields.get("item_assets", {})
+
+    if not item_assets:
+        logger.warning(
+            f"Collection '{collection_id}' has no item_assets defined. "
+            "Will attempt to derive bands from first search result."
+        )
+
+    # Identify spectral bands (assets with eo:bands extension)
+    spectral_bands = []
+    all_assets = list(item_assets.keys())
+
+    for asset_name, asset_def in item_assets.items():
+        # Assets with eo:bands are spectral/imagery bands
+        if "eo:bands" in asset_def:
+            spectral_bands.append(asset_name)
+
+    # Apply band subset filter if provided
+    if band_subset:
+        filtered = [b for b in band_subset if b in spectral_bands]
+        if not filtered:
+            available = ", ".join(spectral_bands) if spectral_bands else "none found"
+            raise ValueError(
+                f"None of the requested bands {band_subset} found in collection. "
+                f"Available spectral bands: {available}"
+            )
+        if len(filtered) < len(band_subset):
+            missing = set(band_subset) - set(filtered)
+            logger.warning(f"Some requested bands not found: {missing}")
+        spectral_bands = filtered
+
+    # Validate QA band
+    qa_band = qa_band_name if qa_band_name in all_assets else None
+
+    logger.info(
+        f"Collection '{title}': {len(spectral_bands)} spectral bands, "
+        f"QA band '{qa_band_name}' {'found' if qa_band else 'NOT found'}"
+    )
+    logger.debug(f"Spectral bands: {spectral_bands}")
+
+    return CollectionInfo(
+        collection_id=collection_id,
+        title=title,
+        spectral_bands=spectral_bands,
+        all_assets=all_assets,
+        qa_band=qa_band,
+    )
+
+
+def get_asset_scale_offset_nodata(
+    stac_item: Any,
+    asset_name: str,
+) -> tuple[float, float, Optional[float]]:
+    """
+    Extract scale, offset, and nodata from a STAC item's asset metadata.
+
+    Uses the raster:bands extension to get per-band scaling information.
+    Falls back to sensible defaults if metadata not available.
+
+    Parameters
+    ----------
+    stac_item : pystac.Item
+        STAC item (should be signed for Planetary Computer)
+    asset_name : str
+        Name of the asset to get metadata for
+
+    Returns
+    -------
+    tuple of (scale, offset, nodata)
+        scale : float - Multiplicative scale factor (default: 1.0)
+        offset : float - Additive offset (default: 0.0)
+        nodata : float or None - Nodata value (default: None)
+    """
+    # Defaults if metadata not found
+    scale = 1.0
+    offset = 0.0
+    nodata = None
+
+    if asset_name not in stac_item.assets:
+        logger.debug(f"Asset '{asset_name}' not found in item {stac_item.id}")
+        return scale, offset, nodata
+
+    asset = stac_item.assets[asset_name]
+
+    # Get raster:bands extension data
+    raster_bands = asset.extra_fields.get("raster:bands", [])
+
+    if raster_bands and len(raster_bands) > 0:
+        band_info = raster_bands[0]  # First (usually only) band in asset
+        scale = band_info.get("scale", 1.0)
+        offset = band_info.get("offset", 0.0)
+        nodata = band_info.get("nodata", None)
+
+    return scale, offset, nodata
 
 
 # ============================================================================
@@ -178,13 +529,15 @@ def load_aoi_geometries(
 def search_for_aoi(
     aoi_feature: pd.Series,
     aoi_crs: Any,
-    collection_url: str,
+    collection_id: str,
     start_date: Optional[dt.datetime] = None,
     end_date: Optional[dt.datetime] = None,
     cloud_cover_max: Optional[float] = None,
 ) -> STACSearchResult:
     """
-    Search STAC collection for a single AOI feature.
+    Search Planetary Computer STAC collection for a single AOI feature.
+
+    Uses the PC_CATALOG_URL constant defined at module level.
 
     Parameters
     ----------
@@ -192,8 +545,8 @@ def search_for_aoi(
         Single row from GeoDataFrame with geometry
     aoi_crs : Any
         Coordinate reference system of the AOI geometry
-    collection_url : str
-        STAC collection URL
+    collection_id : str
+        STAC collection ID to search
     start_date : datetime, optional
         Temporal search start
     end_date : datetime, optional
@@ -214,25 +567,63 @@ def search_for_aoi(
     minx, miny, maxx, maxy = gdf_wgs84.total_bounds
     bbox = (float(minx), float(miny), float(maxx), float(maxy))
 
-    # Temporal range
-    temporal = None
-    if start_date and end_date:
-        temporal = (start_date, end_date)
+    logger.debug(f"Searching AOI {aoi_id} with bbox={bbox}")
 
-    # Search STAC
+    # Search STAC via Planetary Computer
     try:
-        items = stac_utils.search_stac_collection(
-            collection_url=collection_url,
-            bbox=bbox,
-            temporal=temporal,
-            cloud_cover_max=cloud_cover_max,
-            max_items=1000,
-        )
+        # Connect to Planetary Computer catalog
+        catalog = Client.open(PC_CATALOG_URL)
+        logger.debug(f"Connected to {PC_CATALOG_URL}")
 
-        # Parse items
-        parsed_items = [stac_utils.parse_stac_item(item) for item in items]
+        # Build search parameters
+        search_params = {
+            "collections": [collection_id],
+            "bbox": bbox,
+            "max_items": 1000,
+        }
 
-        logger.debug(f"Found {len(parsed_items)} items for AOI {aoi_id}")
+        # Add temporal filter if specified
+        if start_date and end_date:
+            search_params["datetime"] = (
+                f"{start_date.isoformat()}/{end_date.isoformat()}"
+            )
+            logger.debug(f"Temporal filter: {start_date.date()} to {end_date.date()}")
+
+        # Add cloud cover filter if specified
+        if cloud_cover_max is not None:
+            search_params["query"] = {
+                CLOUD_COVER_PROPERTY: {"lt": cloud_cover_max}
+            }
+            logger.debug(f"Cloud cover filter: < {cloud_cover_max}%")
+
+        # Execute search
+        search = catalog.search(**search_params)
+        items = list(search.items())
+
+        # Parse items (inline the parse_stac_item logic)
+        parsed_items = []
+        for item in items:
+            # Extract cloud cover from properties
+            cloud_cover = None
+            if item.properties:
+                for key in [CLOUD_COVER_PROPERTY, "cloud_cover", "cloudCover"]:
+                    if key in item.properties:
+                        cloud_cover = item.properties[key]
+                        break
+
+            parsed_items.append({
+                "id": item.id,
+                "datetime": item.datetime,
+                "geometry": item.geometry,
+                "bbox": item.bbox,
+                "cloud_cover": cloud_cover,
+                "collection": (
+                    item.collection_id if hasattr(item, "collection_id") else None
+                ),
+                "properties": item.properties if item.properties else {},
+            })
+
+        logger.info(f"Found {len(parsed_items)} items for AOI {aoi_id}")
 
         return STACSearchResult(
             aoi_id=aoi_id,
@@ -475,10 +866,15 @@ def load_and_clip_item(
     stac_item: Any,
     aoi_geom: Any,
     aoi_crs: Any,
-    band_names: Optional[List[str]] = None,
+    band_names: List[str],
+    apply_scale: bool = False,
 ) -> Optional[xr.Dataset]:
     """
     Load STAC item bands and clip to AOI geometry using stackstac.
+
+    Loads the specified bands and clips to the AOI geometry. Optionally applies
+    per-band scale/offset from STAC raster:bands metadata to convert DN to
+    surface reflectance.
 
     Parameters
     ----------
@@ -488,13 +884,16 @@ def load_and_clip_item(
         AOI polygon
     aoi_crs : str or CRS
         CRS of AOI geometry
-    band_names : list of str, optional
-        Specific bands to load. If None, loads all available bands.
+    band_names : list of str
+        Bands to load (asset names from collection)
+    apply_scale : bool, default=False
+        If True, apply per-band scale/offset from raster:bands metadata.
+        Default is False (output raw DN values).
 
     Returns
     -------
     xarray.Dataset
-        Dataset with clipped bands
+        Dataset with clipped bands (raw DN values, or scaled if apply_scale=True)
     """
     # Convert AOI to GeoDataFrame
     aoi_gdf = gpd.GeoDataFrame([{"geometry": aoi_geom}], crs=aoi_crs)
@@ -504,7 +903,7 @@ def load_and_clip_item(
     item_epsg = None
 
     if hasattr(stac_item, "properties") and stac_item.properties:
-        # try proj:cdode first, then proj:epsg
+        # try proj:code first, then proj:epsg
         proj_code = stac_item.properties.get("proj:code")
         if proj_code:
             # Extract EPSG code from proj:code (e.g., "EPSG:32633")
@@ -517,9 +916,9 @@ def load_and_clip_item(
     # Reproject AOI to match imagery CRS
     if item_epsg:
         aoi_native = aoi_gdf.to_crs(f"EPSG:{item_epsg}")
-
-    # if EPSG code not found, skip this item
+        logger.debug(f"Item CRS: EPSG:{item_epsg}")
     else:
+        # if EPSG code not found, skip this item
         logger.warning(
             f"Could not determine CRS for item {stac_item.id}, skipping"
         )
@@ -529,17 +928,19 @@ def load_and_clip_item(
     minx, miny, maxx, maxy = aoi_native.total_bounds
     bounds = (float(minx), float(miny), float(maxx), float(maxy))
 
+    # Sign STAC item URLs for Planetary Computer (adds SAS tokens to Azure blob URLs)
+    signed_item = pc.sign(stac_item)
+
     # Use stackstac to load the STAC item in its native CRS
-    # This handles all GDAL configuration and cloud access automatically
+    # CRITICAL: rescale=False to get raw DN values, we apply scale/offset manually
+    # fill_value=np.nan ensures nodata areas are NaN from the start
     stack = stackstac.stack(
-        [stac_item],
+        [signed_item],
         bounds=bounds,
-        epsg=item_epsg,  # Use native projection
-        assets=band_names,  # Only load specified bands
-        chunksize=512,
-        dtype=np.dtype("int16"),
-        fill_value=-9999,  # Standard nodata value for int16 satellite data
-        rescale=False,  # Keep original integer values
+        assets=band_names,
+        epsg=item_epsg,
+        rescale=False,  # IMPORTANT: Don't auto-rescale, we handle it manually
+        fill_value=np.nan,
     )
 
     # Stack has dimensions: (time, band, y, x)
@@ -555,14 +956,117 @@ def load_and_clip_item(
     # Convert to dataset with bands as variables
     ds = clipped.to_dataset(dim="band")
 
+    # Apply per-band scale/offset from STAC raster:bands metadata
+    if apply_scale:
+        for band_name in band_names:
+            if band_name not in ds.data_vars:
+                continue
+
+            scale, offset, nodata = get_asset_scale_offset_nodata(
+                stac_item, band_name
+            )
+
+            band_data = ds[band_name]
+
+            # Mask nodata values before scaling
+            if nodata is not None:
+                band_data = band_data.where(band_data != nodata)
+
+            # Apply scale/offset: scaled_value = DN * scale + offset
+            if scale != 1.0 or offset != 0.0:
+                band_data = band_data * scale + offset
+                logger.debug(
+                    f"Applied scale={scale}, offset={offset} to band '{band_name}'"
+                )
+
+            ds[band_name] = band_data
+
     return ds
+
+
+def process_single_item(
+    stac_item: Any,
+    aoi_geom: Any,
+    aoi_crs: Any,
+    spectral_bands: List[str],
+    qa_band: Optional[str] = None,
+    mask_spec: Optional[str] = None,
+    apply_scale: bool = False,
+) -> Optional[xr.Dataset]:
+    """
+    Load, clip, and optionally mask a single STAC item.
+
+    This is the core processing function used by both individual and composite
+    modes. It handles spectral band loading, QA band loading, and mask application.
+
+    Parameters
+    ----------
+    stac_item : pystac.Item
+        STAC item to process
+    aoi_geom : Shapely geometry
+        AOI polygon for clipping
+    aoi_crs : str or CRS
+        CRS of AOI geometry
+    spectral_bands : list of str
+        Names of spectral bands to load (from collection metadata)
+    qa_band : str, optional
+        Name of QA band for masking
+    mask_spec : str, optional
+        Mask specification (e.g., 'cloud,shadow' or 'clear-only')
+    apply_scale : bool, default=False
+        If True, convert DN to surface reflectance using raster:bands metadata
+
+    Returns
+    -------
+    xarray.Dataset or None
+        Processed dataset, or None if processing failed
+    """
+    item_id = stac_item.id
+
+    # Load spectral bands
+    dataset = load_and_clip_item(
+        stac_item=stac_item,
+        aoi_geom=aoi_geom,
+        aoi_crs=aoi_crs,
+        band_names=spectral_bands,
+        apply_scale=apply_scale,
+    )
+
+    if dataset is None:
+        logger.warning(f"Skipped item {item_id}: CRS not found")
+        return None
+
+    logger.debug(f"Loaded {len(dataset.data_vars)} bands for item {item_id}")
+
+    # Apply QA mask if requested
+    if mask_spec and qa_band:
+        qa_dataset = load_and_clip_item(
+            stac_item=stac_item,
+            aoi_geom=aoi_geom,
+            aoi_crs=aoi_crs,
+            band_names=[qa_band],
+            apply_scale=False,
+        )
+
+        if qa_dataset is None:
+            logger.warning(f"Failed to load QA band for {item_id}, skipping mask")
+        else:
+            qa_data = next(iter(qa_dataset.data_vars.values()))
+            mask_types = [m.strip() for m in mask_spec.split(",")]
+
+            for var_name in dataset.data_vars:
+                dataset[var_name] = apply_qa_mask(
+                    dataset[var_name], qa_data, mask_types
+                )
+            logger.debug(f"Applied QA mask: {mask_types}")
+
+    return dataset
 
 
 def apply_qa_mask(
     data: xr.DataArray,
     qa_data: xr.DataArray,
     mask_types: List[str],
-    nodata_value: int = -9999,
 ) -> xr.DataArray:
     """
     Apply quality mask to imagery data.
@@ -570,18 +1074,16 @@ def apply_qa_mask(
     Parameters
     ----------
     data : xarray.DataArray
-        Imagery band data
+        Imagery band data (float values)
     qa_data : xarray.DataArray
         Quality assessment band data
     mask_types : list of str
         Bit types to mask (e.g., ['cloud', 'shadow'])
-    nodata_value : int
-        Value to use for masked pixels (default: -9999)
 
     Returns
     -------
     xarray.DataArray
-        Masked data with masked pixels set to nodata
+        Masked data with masked pixels set to NaN
     """
     # Landsat QA_PIXEL bit definitions
     bit_map = {
@@ -598,7 +1100,7 @@ def apply_qa_mask(
     if "clear-only" in mask_types:
         # Keep only clear pixels (bit 6 == 1)
         mask = ((qa_uint8 >> 6) & 1) == 1
-        data_masked = data.where(mask, other=nodata_value)
+        data_masked = data.where(mask, other=np.nan)
     else:
         # Mask specified bit types
         for mask_type in mask_types:
@@ -607,7 +1109,7 @@ def apply_qa_mask(
                 type_mask = ((qa_uint8 >> bit_pos) & 1) == 1
                 mask = mask | type_mask
 
-        data_masked = data.where(~mask, other=nodata_value)
+        data_masked = data.where(~mask, other=np.nan)
 
     return data_masked
 
@@ -649,19 +1151,88 @@ def stack_and_write_cog(
     if first_band.rio.transform() is not None:
         ds = ds.rio.write_transform(first_band.rio.transform())
 
-    # Set nodata value
-    ds = ds.rio.write_nodata(-9999)
-
-    # Set attributes
-    ds.attrs["scale_factor"] = 0.0001  # Landsat scale factor
-    ds.attrs["add_offset"] = 0.0
-
     # Create output directory
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Write COG
+    # Write COG (float32 with NaN for nodata)
     logger.debug(f"Writing {len(available)}-band COG to {output_path.name}")
     ds.rio.to_raster(str(output_path), driver="COG")
+
+
+def create_temporal_composite(
+    datasets: List[xr.Dataset],
+    method: str = "median",
+) -> Optional[xr.Dataset]:
+    """
+    Create temporal composite from multiple datasets.
+
+    Stacks datasets along time dimension and aggregates using specified method.
+    Handles NaN values gracefully (e.g., from cloud masking).
+
+    Parameters
+    ----------
+    datasets : list of xarray.Dataset
+        Clipped datasets, one per date (each has band variables)
+    method : str
+        Aggregation method ('median', 'mean', 'max', 'min'). Default: 'median'
+
+    Returns
+    -------
+    xarray.Dataset or None
+        Single composite with bands aggregated across time.
+        Returns None if no datasets or no common bands found.
+    """
+    if not datasets:
+        logger.warning("No datasets provided for compositing")
+        return None
+
+    # Find common bands across all datasets
+    all_bands = [set(ds.data_vars.keys()) for ds in datasets]
+    common_bands = set.intersection(*all_bands) if all_bands else set()
+
+    if not common_bands:
+        logger.warning("No common bands found across datasets")
+        return None
+
+    common_bands = sorted(list(common_bands))
+    logger.debug(f"Found {len(common_bands)} common bands for composite")
+
+    # Stack each band along time dimension and aggregate
+    composite_vars = {}
+    for band_name in common_bands:
+        # Get this band from each dataset
+        band_arrays = [ds[band_name] for ds in datasets]
+
+        # Stack along new time dimension
+        # Use join='outer' to handle slight coordinate differences between passes
+        stacked = xr.concat(band_arrays, dim="time", join="outer")
+
+        # Apply aggregation method (skipna=True handles masked pixels)
+        if method == "median":
+            aggregated = stacked.median(dim="time", skipna=True)
+        elif method == "mean":
+            aggregated = stacked.mean(dim="time", skipna=True)
+        elif method == "max":
+            aggregated = stacked.max(dim="time", skipna=True)
+        elif method == "min":
+            aggregated = stacked.min(dim="time", skipna=True)
+        else:
+            logger.warning(f"Unknown aggregation method {method}, using median")
+            aggregated = stacked.median(dim="time", skipna=True)
+
+        composite_vars[band_name] = aggregated
+
+    # Build composite dataset
+    composite = xr.Dataset(composite_vars)
+
+    # Preserve CRS and spatial metadata from first dataset
+    first_ds = datasets[0]
+    composite = composite.rio.write_crs(first_ds.rio.crs)
+    composite = composite.rio.set_spatial_dims(x_dim="x", y_dim="y")
+    if first_ds.rio.transform() is not None:
+        composite = composite.rio.write_transform(first_ds.rio.transform())
+
+    return composite
 
 
 # ============================================================================
@@ -672,44 +1243,77 @@ def stack_and_write_cog(
 def parse_args() -> argparse.Namespace:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
-        description="Search and download imagery from STAC collections",
+        description=(
+            "Search and download STAC imagery from Microsoft Planetary Computer. "
+            "Supports any collection with spectral bands (Landsat, Sentinel-2, etc.)."
+        ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
+        epilog=f"""
+Default collection: {DEFAULT_COLLECTION_ID}
+Endpoint: {PC_CATALOG_URL}
+
+Spectral bands are auto-detected from collection metadata (assets with eo:bands).
+Scale/offset/nodata values are read from each asset's raster:bands metadata.
+
 Examples:
-  # Basic search with Landsat
+  # Basic search (Landsat default)
   python stac_imagery_download.py \\
-    --collection https://landsatlook.usgs.gov/stac-server \\
     --output-dir ./output \\
-    --aoi sites.shp \\
+    --aoi sites.geojson \\
     --start-date 2020-06-01 \\
     --end-date 2020-08-31 \\
     --cloud-cover 20
 
-  # Download and composite
+  # Sentinel-2 with specific bands
   python stac_imagery_download.py \\
-    --collection ... \\
+    --collection sentinel-2-l2a \\
+    --bands B02,B03,B04,B08 \\
     --output-dir ./output \\
-    --aoi sites.shp \\
+    --aoi sites.geojson \\
+    --start-date 2020-06-01 \\
+    --end-date 2020-08-31
+
+  # Download with cloud masking and compositing
+  python stac_imagery_download.py \\
+    --output-dir ./output \\
+    --aoi sites.geojson \\
     --start-date 2020-06-01 \\
     --end-date 2020-08-31 \\
-    --mask cloud,shadow \\
+    --mask clear-only \\
     --composite \\
-    --log-file
+    --yes
         """,
     )
 
     # Required arguments
     parser.add_argument(
-        "--collection",
-        type=str,
-        required=True,
-        help="STAC collection URL",
-    )
-    parser.add_argument(
         "--output-dir",
         type=Path,
         required=True,
         help="Output directory for imagery",
+    )
+
+    # Collection configuration
+    parser.add_argument(
+        "--collection",
+        type=str,
+        default=DEFAULT_COLLECTION_ID,
+        help=f"STAC collection ID (default: {DEFAULT_COLLECTION_ID})",
+    )
+    parser.add_argument(
+        "--bands",
+        type=str,
+        default=None,
+        help=(
+            "Comma-separated list of bands to download (default: all spectral bands). "
+            "Example: --bands coastal,blue,green,red,nir08"
+        ),
+    )
+    parser.add_argument(
+        "--qa-band",
+        type=str,
+        default=DEFAULT_QA_BAND,
+        help=f"QA band name for masking (default: {DEFAULT_QA_BAND})",
     )
 
     # Optional search filters
@@ -756,6 +1360,11 @@ Examples:
         action="store_true",
         help="Create temporal median composite",
     )
+    parser.add_argument(
+        "--rescale",
+        action="store_true",
+        help="Convert DN to surface reflectance (default: output raw DN values)",
+    )
 
     # Other options
     parser.add_argument(
@@ -769,6 +1378,12 @@ Examples:
         default="INFO",
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
         help="Logging level",
+    )
+    parser.add_argument(
+        "-y",
+        "--yes",
+        action="store_true",
+        help="Auto-proceed with download (skip user prompt)",
     )
 
     return parser.parse_args()
@@ -801,11 +1416,49 @@ def main() -> None:
     # =========================================================================
     # Parse and validate arguments
     # =========================================================================
+
+    # Parse band subset if provided
+    band_subset = None
+    if args.bands:
+        band_subset = [b.strip() for b in args.bands.split(",")]
+
+    # Fetch collection metadata
     print("=" * 70)
-    print("STAC Imagery Search and Download")
+    print("STAC Imagery Download")
     print("=" * 70)
-    print(f"Collection: {args.collection}")
-    print(f"Output directory: {args.output_dir}")
+    print(f"Fetching collection metadata for '{args.collection}'...")
+
+    try:
+        collection_info = get_collection_info(
+            collection_id=args.collection,
+            qa_band_name=args.qa_band,
+            band_subset=band_subset,
+        )
+    except ValueError as e:
+        print(f"\nError: {e}")
+        return
+
+    print(f"Collection: {collection_info.title} ({collection_info.collection_id})")
+    print(f"Endpoint:   {PC_CATALOG_URL}")
+    print(f"Output:     {args.output_dir}")
+    print(f"Bands:      {len(collection_info.spectral_bands)} spectral bands")
+    if collection_info.spectral_bands:
+        print(f"            [{', '.join(collection_info.spectral_bands)}]")
+
+    # Validate QA band if masking is requested
+    if args.mask:
+        if collection_info.qa_band is None:
+            print(f"\nError: Masking requested (--mask {args.mask}) but QA band "
+                  f"'{args.qa_band}' was not found in collection '{args.collection}'.")
+            print(f"\nAvailable assets in this collection:")
+            for asset_name in sorted(collection_info.all_assets):
+                print(f"  - {asset_name}")
+            print(f"\nTo fix this, either:")
+            print(f"  1. Specify the correct QA band name with --qa-band <name>")
+            print(f"  2. Remove the --mask option to skip masking")
+            return
+        else:
+            print(f"QA band:    {collection_info.qa_band}")
 
     # Parse dates
     start_date = None
@@ -845,27 +1498,16 @@ def main() -> None:
             result = search_for_aoi(
                 aoi_feature=feature,
                 aoi_crs=aoi_crs,
-                collection_url=args.collection,
+                collection_id=collection_info.collection_id,
                 start_date=start_date,
                 end_date=end_date,
                 cloud_cover_max=args.cloud_cover,
             )
         else:
-            # Global search (bounding box of world)
-            result = STACSearchResult(
-                aoi_id="global",
-                aoi_geometry=box(-180, -90, 180, 90),
-                aoi_crs="EPSG:4326",
-                items=[],
-            )
-            # Only pass temporal if both dates are provided
-            temporal = (start_date, end_date) if start_date and end_date else None
-            items = stac_utils.search_stac_collection(
-                collection_url=args.collection,
-                temporal=temporal,
-                cloud_cover_max=args.cloud_cover,
-            )
-            result.items = [stac_utils.parse_stac_item(item) for item in items]
+            # Global search requires an AOI - prompt user
+            print("\nError: --aoi is required. Global search is not supported.")
+            print("Please provide an AOI file with --aoi option.")
+            return
 
         all_results.append(result)
 
@@ -881,8 +1523,12 @@ def main() -> None:
 
     display_search_items(all_results)
 
-    # Prompt user
-    action = prompt_user_action()
+    # Prompt user (or auto-proceed if --yes flag is set)
+    if args.yes:
+        action = "continue"
+        print("\n[Auto-proceeding with download (--yes flag)]")
+    else:
+        action = prompt_user_action()
 
     if action == "csv":
         csv_path = args.output_dir / "search_results.csv"
@@ -905,24 +1551,29 @@ def main() -> None:
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Discover bands from first item
-    sample_bands = stac_utils.discover_stac_bands(
-        args.collection,
-        sample_item=None,
-    )
-    logger.info(f"Available bands: {sample_bands}")
-
     success_count = 0
     failed_count = 0
 
+    # =========================================================================
+    # Process each AOI
+    # =========================================================================
     for result in all_results:
         if not result.items or not result.stac_items:
             continue
 
-        # Iterate over both parsed and original STAC items together
+        # Collect datasets and dates for this AOI
+        aoi_datasets: List[xr.Dataset] = []
+        item_dates: List[str] = []
+
+        # Process each item
+        desc = (
+            f"Loading items for AOI {result.aoi_id}"
+            if args.composite
+            else f"Processing AOI {result.aoi_id}"
+        )
         for item_dict, stac_item in tqdm(
             zip(result.items, result.stac_items),
-            desc=f"Processing AOI {result.aoi_id}",
+            desc=desc,
             unit="item",
             leave=False,
             total=len(result.items),
@@ -934,109 +1585,93 @@ def main() -> None:
                     if item_dict.get("datetime")
                     else "unknown"
                 )
+                item_dates.append(item_date)
 
-                # Output filename
-                output_file = (
-                    args.output_dir
-                    / f"{result.aoi_id}_{item_date}_{item_id}_bands.tif"
-                )
+                # For individual mode, check if output already exists
+                if not args.composite:
+                    output_file = (
+                        args.output_dir
+                        / f"aoi{result.aoi_id}_{item_date}_{item_id}.tif"
+                    )
+                    if output_file.exists():
+                        logger.debug(f"File already exists: {output_file}")
+                        success_count += 1
+                        continue
 
-                # Skip if already exists
-                if output_file.exists():
-                    logger.debug(f"File already exists: {output_file}")
-                    success_count += 1
-                    continue
-
-                # Load and clip all bands using stackstac
+                # Process the item (load, clip, mask)
                 try:
-                    # Filter sample_bands to only include spectral bands (exclude QA)
-                    spectral_bands = [
-                        b
-                        for b in sample_bands
-                        if not any(
-                            pattern in b.lower()
-                            for pattern in ["qa", "quality", "pixel_qa"]
-                        )
-                    ]
-
-                    dataset = load_and_clip_item(
+                    dataset = process_single_item(
                         stac_item=stac_item,
                         aoi_geom=result.aoi_geometry,
                         aoi_crs=result.aoi_crs,
-                        band_names=spectral_bands if spectral_bands else None,
+                        spectral_bands=collection_info.spectral_bands,
+                        qa_band=collection_info.qa_band,
+                        mask_spec=args.mask,
+                        apply_scale=args.rescale,
                     )
 
-                    # Check if loading failed (returns None when CRS not found)
                     if dataset is None:
-                        logger.warning(f"Skipped item {item_id}: CRS not found")
                         failed_count += 1
                         continue
 
-                    # Convert dataset to dictionary of DataArrays for compatibility
-                    clipped_bands = {
-                        str(var): dataset[var] for var in dataset.data_vars
-                    }
-
-                    logger.debug(
-                        f"Loaded {len(clipped_bands)} bands for item {item_id}"
-                    )
-
                 except Exception as e:
-                    logger.warning(f"Failed to load/clip item {item_id}: {e}")
+                    logger.warning(f"Failed to process item {item_id}: {e}")
                     failed_count += 1
                     continue
 
-                if not clipped_bands:
-                    logger.warning(f"No bands clipped for item {item_id}")
-                    failed_count += 1
-                    continue
-
-                # Apply QA mask if requested
-                if args.mask:
-                    try:
-                        # Load QA band separately
-                        qa_dataset = load_and_clip_item(
-                            stac_item=stac_item,
-                            aoi_geom=result.aoi_geometry,
-                            aoi_crs=result.aoi_crs,
-                            band_names=["qa_pixel"],  # Landsat QA band name
-                        )
-
-                        # Check if QA loading succeeded
-                        if qa_dataset is None:
-                            logger.warning(f"Failed to load QA band for {item_id}")
-                            continue
-
-                        # Get QA data array
-                        qa_data = next(iter(qa_dataset.data_vars.values()))
-                        mask_types = [m.strip() for m in args.mask.split(",")]
-
-                        # Apply mask to each band
-                        for band_name in clipped_bands:
-                            clipped_bands[band_name] = apply_qa_mask(
-                                clipped_bands[band_name],
-                                qa_data,
-                                mask_types,
-                            )
-                        logger.debug(f"Applied QA mask: {mask_types}")
-                    except Exception as e:
-                        logger.warning(f"Failed to apply QA mask: {e}")
-
-                # Write stacked COG
-                try:
-                    stack_and_write_cog(
-                        clipped_bands=clipped_bands,
-                        output_path=output_file,
-                        band_names=list(clipped_bands.keys()),
-                    )
-                    logger.info(f"✓ Downloaded {item_id} to {output_file.name}")
+                # Handle output based on mode
+                if args.composite:
+                    # Collect for later compositing
+                    aoi_datasets.append(dataset)
                     success_count += 1
-                except Exception as e:
-                    logger.error(f"Failed to write COG for {item_id}: {e}")
-                    failed_count += 1
+                else:
+                    # Write individual file immediately
+                    try:
+                        clipped_bands = {
+                            str(var): dataset[var] for var in dataset.data_vars
+                        }
+                        stack_and_write_cog(
+                            clipped_bands=clipped_bands,
+                            output_path=output_file,
+                            band_names=list(clipped_bands.keys()),
+                        )
+                        logger.info(f"✓ Downloaded {item_id} to {output_file.name}")
+                        success_count += 1
+                    except Exception as e:
+                        logger.error(f"Failed to write COG for {item_id}: {e}")
+                        failed_count += 1
 
             except Exception as e:
                 logger.error(f"Failed to process item: {e}")
+                failed_count += 1
+
+        # Create composite if in composite mode
+        if args.composite and aoi_datasets:
+            try:
+                min_date = min(item_dates) if item_dates else "unknown"
+                max_date = max(item_dates) if item_dates else "unknown"
+
+                composite = create_temporal_composite(aoi_datasets, method="median")
+
+                if composite is None:
+                    logger.error(
+                        f"Failed to create composite for AOI {result.aoi_id}"
+                    )
+                    continue
+
+                output_file = (
+                    args.output_dir
+                    / f"aoi{result.aoi_id}_{min_date}-{max_date}_composite.tif"
+                )
+
+                output_file.parent.mkdir(parents=True, exist_ok=True)
+                composite.rio.to_raster(str(output_file), driver="COG")
+                logger.info(
+                    f"✓ Created composite for AOI {result.aoi_id}: {output_file.name}"
+                )
+
+            except Exception as e:
+                logger.error(f"Failed to create/write composite: {e}")
                 failed_count += 1
 
     # =========================================================================
