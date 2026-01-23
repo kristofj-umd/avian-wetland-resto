@@ -187,6 +187,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import logging
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -202,6 +203,16 @@ from shapely.geometry import box
 from tqdm import tqdm
 
 import planetary_computer as pc
+
+# ============================================================================
+# Warning Suppression
+# ============================================================================
+# Suppress noisy warnings from dask/xarray that occur during normal operation.
+# These are re-enabled when --log-level DEBUG is used (see main()).
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+warnings.filterwarnings("ignore", message=".*Increasing number of chunks.*")
+warnings.filterwarnings("ignore", message=".*invalid value encountered.*")
+warnings.filterwarnings("ignore", message=".*All-NaN slice.*")
 from pystac_client import Client
 
 # ============================================================================
@@ -1400,6 +1411,10 @@ def main() -> None:
     logger.setLevel(log_level)
     for handler in logger.handlers:
         handler.setLevel(log_level)
+
+    # Re-enable suppressed warnings at DEBUG level
+    if log_level == logging.DEBUG:
+        warnings.resetwarnings()
 
     if args.log_file:
         args.output_dir.mkdir(parents=True, exist_ok=True)
