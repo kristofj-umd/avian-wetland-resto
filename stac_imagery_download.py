@@ -939,13 +939,32 @@ def load_and_clip_item(
     # Sign STAC item URLs for Planetary Computer (adds SAS tokens to Azure blob URLs)
     signed_item = pc.sign(stac_item)
 
+    # Filter requested bands to only those that exist in this item's assets.
+    # This handles cross-sensor compositing (e.g., Landsat 5 lacks 'coastal' band).
+    item_assets = set(stac_item.assets.keys())
+    available_bands = [b for b in band_names if b in item_assets]
+
+    if not available_bands:
+        logger.warning(
+            f"Item {stac_item.id} has none of the requested bands. "
+            f"Requested: {band_names}, Available: {sorted(item_assets)}"
+        )
+        return None
+
+    if len(available_bands) < len(band_names):
+        missing = set(band_names) - set(available_bands)
+        logger.debug(
+            f"Item {stac_item.id} missing bands: {missing} "
+            f"(sensor may not have these bands)"
+        )
+
     # Use stackstac to load the STAC item in its native CRS
     # CRITICAL: rescale=False to get raw DN values, we apply scale/offset manually
     # fill_value=np.nan ensures nodata areas are NaN from the start
     stack = stackstac.stack(
         [signed_item],
         bounds=bounds,
-        assets=band_names,
+        assets=available_bands,  # Only request bands that exist in this item
         epsg=item_epsg,
         rescale=False,  # IMPORTANT: Don't auto-rescale, we handle it manually
         fill_value=np.nan,
@@ -966,7 +985,7 @@ def load_and_clip_item(
 
     # Apply per-band scale/offset from STAC raster:bands metadata
     if apply_scale:
-        for band_name in band_names:
+        for band_name in available_bands:
             if band_name not in ds.data_vars:
                 continue
 
@@ -1212,8 +1231,13 @@ def create_temporal_composite(
         band_arrays = [ds[band_name] for ds in datasets]
 
         # Stack along new time dimension
-        # Use join='outer' to handle slight coordinate differences between passes
-        stacked = xr.concat(band_arrays, dim="time", join="outer")
+        # Use join='inner' to take the intersection of all scene extents.
+        # This handles scenes with different coverage (e.g., different paths/rows,
+        # or AOI near scene edges). Only pixels present in ALL scenes are kept.
+        # coords='minimal' only includes coords that vary across arrays.
+        stacked = xr.concat(
+            band_arrays, dim="time", join="inner", coords="minimal"
+        )
 
         # Apply aggregation method (skipna=True handles masked pixels)
         if method == "median":
