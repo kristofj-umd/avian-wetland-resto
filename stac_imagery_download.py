@@ -362,7 +362,9 @@ def get_collection_info(
     collection = catalog.get_collection(collection_id)
 
     if collection is None:
-        raise ValueError(f"Collection '{collection_id}' not found at {PC_CATALOG_URL}")
+        raise ValueError(
+            f"Collection '{collection_id}' not found at {PC_CATALOG_URL}"
+        )
 
     # Get collection title
     title = collection.title or collection_id
@@ -389,7 +391,9 @@ def get_collection_info(
     if band_subset:
         filtered = [b for b in band_subset if b in spectral_bands]
         if not filtered:
-            available = ", ".join(spectral_bands) if spectral_bands else "none found"
+            available = (
+                ", ".join(spectral_bands) if spectral_bands else "none found"
+            )
             raise ValueError(
                 f"None of the requested bands {band_subset} found in collection. "
                 f"Available spectral bands: {available}"
@@ -595,7 +599,9 @@ def search_for_aoi(
             search_params["datetime"] = (
                 f"{start_date.isoformat()}/{end_date.isoformat()}"
             )
-            logger.debug(f"Temporal filter: {start_date.date()} to {end_date.date()}")
+            logger.debug(
+                f"Temporal filter: {start_date.date()} to {end_date.date()}"
+            )
 
         # Add cloud cover filter if specified
         if cloud_cover_max is not None:
@@ -619,17 +625,21 @@ def search_for_aoi(
                         cloud_cover = item.properties[key]
                         break
 
-            parsed_items.append({
-                "id": item.id,
-                "datetime": item.datetime,
-                "geometry": item.geometry,
-                "bbox": item.bbox,
-                "cloud_cover": cloud_cover,
-                "collection": (
-                    item.collection_id if hasattr(item, "collection_id") else None
-                ),
-                "properties": item.properties if item.properties else {},
-            })
+            parsed_items.append(
+                {
+                    "id": item.id,
+                    "datetime": item.datetime,
+                    "geometry": item.geometry,
+                    "bbox": item.bbox,
+                    "cloud_cover": cloud_cover,
+                    "collection": (
+                        item.collection_id
+                        if hasattr(item, "collection_id")
+                        else None
+                    ),
+                    "properties": item.properties if item.properties else {},
+                }
+            )
 
         logger.info(f"Found {len(parsed_items)} items for AOI {aoi_id}")
 
@@ -1076,7 +1086,9 @@ def process_single_item(
         )
 
         if qa_dataset is None:
-            logger.warning(f"Failed to load QA band for {item_id}, skipping mask")
+            logger.warning(
+                f"Failed to load QA band for {item_id}, skipping mask"
+            )
         else:
             qa_data = next(iter(qa_dataset.data_vars.values()))
             mask_types = [m.strip() for m in mask_spec.split(",")]
@@ -1186,6 +1198,80 @@ def stack_and_write_cog(
     ds.rio.to_raster(str(output_path), driver="COG")
 
 
+def _select_composite_crs(datasets: List[xr.Dataset]) -> Any:
+    """
+    Choose a common CRS for compositing multiple datasets.
+
+    If all datasets share the same CRS, returns that CRS unchanged.
+    When datasets span different CRSs (e.g. different UTM zones), selects a
+    broader equal-area CRS based on the centroid of the data.
+
+    Parameters
+    ----------
+    datasets : list of xarray.Dataset
+        Datasets with rioxarray CRS metadata.
+
+    Returns
+    -------
+    rasterio.crs.CRS
+        The CRS all datasets should be reprojected into before compositing.
+    """
+    from pyproj import CRS
+    from rasterio.crs import CRS as RioCRS
+
+    crs_set = {ds.rio.crs.to_epsg() for ds in datasets if ds.rio.crs is not None}
+
+    if len(crs_set) <= 1:
+        # All same CRS (or all None) — keep native
+        return datasets[0].rio.crs
+
+    logger.info(
+        f"Datasets span {len(crs_set)} CRS codes ({crs_set}); "
+        "selecting continental equal-area CRS"
+    )
+
+    # Compute centroid in EPSG:4326 from the first dataset's bounds
+    ref = datasets[0]
+    ref_crs = CRS.from_user_input(ref.rio.crs)
+    minx, miny, maxx, maxy = ref.rio.bounds()
+    centroid_x = (minx + maxx) / 2
+    centroid_y = (miny + maxy) / 2
+
+    # Transform centroid to geographic coordinates
+    from pyproj import Transformer
+
+    transformer = Transformer.from_crs(ref_crs, CRS.from_epsg(4326), always_xy=True)
+    lon, lat = transformer.transform(centroid_x, centroid_y)
+
+    # Continental equal-area CRS lookup
+    # fmt: off
+    continental_crs = [
+        # (min_lon, max_lon, min_lat, max_lat, epsg, label)
+        (-130, -60,  24,  50, 5070, "NAD83 / Conus Albers"),
+        (-170, -130, 50,  72, 3338, "NAD83 / Alaska Albers"),
+        ( -35,  45,  34,  72, 3035, "ETRS89 / LAEA Europe"),
+        ( 100, 160, -45, -10, 3577, "GDA94 / Australian Albers"),
+    ]
+    # fmt: on
+
+    for min_lon, max_lon, min_lat, max_lat, epsg, label in continental_crs:
+        if min_lon <= lon <= max_lon and min_lat <= lat <= max_lat:
+            logger.info(f"Selected CRS: EPSG:{epsg} ({label})")
+            return RioCRS.from_epsg(epsg)
+
+    # Fallback: use the most common CRS among datasets
+    from collections import Counter
+
+    most_common_epsg = Counter(
+        ds.rio.crs.to_epsg() for ds in datasets if ds.rio.crs is not None
+    ).most_common(1)[0][0]
+    logger.info(
+        f"No continental CRS matched (lon={lon:.1f}, lat={lat:.1f}); "
+        f"falling back to most common CRS: EPSG:{most_common_epsg}"
+    )
+    return RioCRS.from_epsg(most_common_epsg)
+
+
 def create_temporal_composite(
     datasets: List[xr.Dataset],
     method: str = "median",
@@ -1224,19 +1310,48 @@ def create_temporal_composite(
     common_bands = sorted(list(common_bands))
     logger.debug(f"Found {len(common_bands)} common bands for composite")
 
+    # Select a common CRS and reproject all datasets onto the same pixel grid.
+    # Scenes may come from different UTM zones or have different pixel origins,
+    # so we must align them before stacking.
+    target_crs = _select_composite_crs(datasets)
+
+    # Reproject the first dataset to the target CRS (may be a no-op if same CRS)
+    reference = datasets[0].rio.reproject(target_crs)
+
+    # Align every dataset to the reference grid
+    aligned = [reference]
+    for ds in datasets[1:]:
+        try:
+            aligned.append(ds.rio.reproject_match(reference))
+        except Exception as e:
+            logger.warning(f"Failed to align dataset to reference grid: {e}")
+            continue
+
+    if not aligned:
+        logger.warning("No datasets could be aligned for compositing")
+        return None
+
+    logger.debug(
+        f"Aligned {len(aligned)} of {len(datasets)} datasets "
+        f"to {target_crs} reference grid"
+    )
+
     # Stack each band along time dimension and aggregate
     composite_vars = {}
     for band_name in common_bands:
-        # Get this band from each dataset
-        band_arrays = [ds[band_name] for ds in datasets]
+        band_arrays = [ds[band_name] for ds in aligned if band_name in ds.data_vars]
 
-        # Stack along new time dimension
-        # Use join='inner' to take the intersection of all scene extents.
-        # This handles scenes with different coverage (e.g., different paths/rows,
-        # or AOI near scene edges). Only pixels present in ALL scenes are kept.
-        # coords='minimal' only includes coords that vary across arrays.
+        if not band_arrays:
+            continue
+
+        # All arrays share the same x/y grid after reproject_match,
+        # so join='override' safely takes the reference coordinates.
         stacked = xr.concat(
-            band_arrays, dim="time", join="inner", coords="minimal"
+            band_arrays,
+            dim="time",
+            join="override",
+            coords="minimal",
+            compat="override",
         )
 
         # Apply aggregation method (skipna=True handles masked pixels)
@@ -1254,15 +1369,12 @@ def create_temporal_composite(
 
         composite_vars[band_name] = aggregated
 
-    # Build composite dataset
+    # Build composite dataset with spatial metadata from reference
     composite = xr.Dataset(composite_vars)
-
-    # Preserve CRS and spatial metadata from first dataset
-    first_ds = datasets[0]
-    composite = composite.rio.write_crs(first_ds.rio.crs)
+    composite = composite.rio.write_crs(reference.rio.crs)
     composite = composite.rio.set_spatial_dims(x_dim="x", y_dim="y")
-    if first_ds.rio.transform() is not None:
-        composite = composite.rio.write_transform(first_ds.rio.transform())
+    if reference.rio.transform() is not None:
+        composite = composite.rio.write_transform(reference.rio.transform())
 
     return composite
 
@@ -1474,7 +1586,9 @@ def main() -> None:
         print(f"\nError: {e}")
         return
 
-    print(f"Collection: {collection_info.title} ({collection_info.collection_id})")
+    print(
+        f"Collection: {collection_info.title} ({collection_info.collection_id})"
+    )
     print(f"Endpoint:   {PC_CATALOG_URL}")
     print(f"Output:     {args.output_dir}")
     print(f"Bands:      {len(collection_info.spectral_bands)} spectral bands")
@@ -1484,13 +1598,17 @@ def main() -> None:
     # Validate QA band if masking is requested
     if args.mask:
         if collection_info.qa_band is None:
-            print(f"\nError: Masking requested (--mask {args.mask}) but QA band "
-                  f"'{args.qa_band}' was not found in collection '{args.collection}'.")
+            print(
+                f"\nError: Masking requested (--mask {args.mask}) but QA band "
+                f"'{args.qa_band}' was not found in collection '{args.collection}'."
+            )
             print(f"\nAvailable assets in this collection:")
             for asset_name in sorted(collection_info.all_assets):
                 print(f"  - {asset_name}")
             print(f"\nTo fix this, either:")
-            print(f"  1. Specify the correct QA band name with --qa-band <name>")
+            print(
+                f"  1. Specify the correct QA band name with --qa-band <name>"
+            )
             print(f"  2. Remove the --mask option to skip masking")
             return
         else:
@@ -1606,8 +1724,10 @@ def main() -> None:
 
         # Print AOI header
         mode_label = "composite" if args.composite else "individual files"
-        print(f"\n[AOI {aoi_idx}/{total_aois}] Processing AOI {result.aoi_id} "
-              f"({len(result.items)} items → {mode_label})")
+        print(
+            f"\n[AOI {aoi_idx}/{total_aois}] Processing AOI {result.aoi_id} "
+            f"({len(result.items)} items → {mode_label})"
+        )
 
         # Process each item with progress bar
         for item_dict, stac_item in tqdm(
@@ -1687,15 +1807,21 @@ def main() -> None:
 
         # Create composite if in composite mode
         if args.composite and aoi_datasets:
-            print(f"  Creating median composite from {len(aoi_datasets)} scenes...")
+            print(
+                f"  Creating median composite from {len(aoi_datasets)} scenes..."
+            )
             try:
                 min_date = min(item_dates) if item_dates else "unknown"
                 max_date = max(item_dates) if item_dates else "unknown"
 
-                composite = create_temporal_composite(aoi_datasets, method="median")
+                composite = create_temporal_composite(
+                    aoi_datasets, method="median"
+                )
 
                 if composite is None:
-                    print(f"  ✗ Failed to create composite for AOI {result.aoi_id}")
+                    print(
+                        f"  ✗ Failed to create composite for AOI {result.aoi_id}"
+                    )
                     failed_count += 1
                     continue
 
@@ -1703,6 +1829,19 @@ def main() -> None:
                     args.output_dir
                     / f"aoi{result.aoi_id}_{min_date}-{max_date}_composite.tif"
                 )
+
+                # --- DEBUG: inspect input datasets and composite ---
+                print(f"  [DEBUG] Input dataset count: {len(aoi_datasets)}")
+                for i, ds in enumerate(aoi_datasets[:4]):
+                    xi = ds.coords["x"].values if "x" in ds.coords else []
+                    yi = ds.coords["y"].values if "y" in ds.coords else []
+                    print(
+                        f"  [DEBUG]   ds[{i}] crs={ds.rio.crs}"
+                        f"  x: len={len(xi)}, first3={xi[:3]}"
+                        f"  y: len={len(yi)}, first3={yi[:3]}"
+                    )
+                print(f"  [DEBUG] Composite sizes: {dict(composite.sizes)}")
+                # --- END DEBUG ---
 
                 print(f"  Writing COG: {output_file.name}")
                 output_file.parent.mkdir(parents=True, exist_ok=True)
