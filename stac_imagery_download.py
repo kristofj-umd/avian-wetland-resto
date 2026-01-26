@@ -85,12 +85,24 @@ Processing Options:
       Apply quality masking to remove clouds, shadows, or other artifacts.
       Uses the QA band specified by --qa-band.
 
-      Mask specifications:
-        clear-only      : Keep only pixels flagged as clear (most restrictive)
+      Preset masks (mutually exclusive):
+        clear-only            : Keep only pixels flagged as clear (most restrictive)
+        clear-only-inc-water  : Keep clear OR water pixels (clear-only without
+                                excluding water bodies)
+
+      Individual bit masks (can be comma-combined):
+        fill            : Mask fill / no-data pixels
+        dilated-cloud   : Mask cloud dilation buffer pixels
+        cirrus          : Mask cirrus cloud pixels
         cloud           : Mask cloud pixels
         shadow          : Mask cloud shadow pixels
-        cirrus          : Mask cirrus cloud pixels
-        cloud,shadow    : Mask both clouds and shadows (comma-separated)
+        snow            : Mask snow / ice pixels
+        water           : Mask water pixels
+
+      Examples:
+        cloud,shadow           : Mask clouds and cloud shadows
+        cloud,shadow,cirrus    : Mask clouds, shadows, and cirrus
+        cloud,shadow,snow      : Mask clouds, shadows, and snow/ice
 
       Masked pixels are set to NaN in the output.
 
@@ -1124,12 +1136,16 @@ def apply_qa_mask(
     xarray.DataArray
         Masked data with masked pixels set to NaN
     """
-    # Landsat QA_PIXEL bit definitions
+    # Landsat QA_PIXEL bit definitions (16-bit packed band, bits 0-7)
     bit_map = {
-        "cloud": 3,  # Cloud
-        "shadow": 4,  # Cloud Shadow
-        "cirrus": 2,  # Cirrus
-        "clear": 6,  # Clear (quality flag)
+        "fill": 0,           # Fill / no data
+        "dilated-cloud": 1,  # Cloud dilation buffer
+        "cirrus": 2,         # Cirrus (high confidence)
+        "cloud": 3,          # Cloud (high confidence)
+        "shadow": 4,         # Cloud shadow (high confidence)
+        "snow": 5,           # Snow / ice (high confidence)
+        "clear": 6,          # Clear
+        "water": 7,          # Water
     }
 
     # Create mask
@@ -1139,6 +1155,12 @@ def apply_qa_mask(
     if "clear-only" in mask_types:
         # Keep only clear pixels (bit 6 == 1)
         mask = ((qa_uint8 >> 6) & 1) == 1
+        data_masked = data.where(mask, other=np.nan)
+    elif "clear-only-inc-water" in mask_types:
+        # Keep clear pixels (bit 6) OR water pixels (bit 7)
+        clear_mask = ((qa_uint8 >> 6) & 1) == 1
+        water_mask = ((qa_uint8 >> 7) & 1) == 1
+        mask = clear_mask | water_mask
         data_masked = data.where(mask, other=np.nan)
     else:
         # Mask specified bit types
@@ -1497,7 +1519,11 @@ Examples:
         "--mask",
         type=str,
         default=None,
-        help="Pixel types to mask (e.g., 'cloud,shadow' or 'clear-only')",
+        help=(
+            "Pixel types to mask. Presets: 'clear-only', 'clear-only-inc-water'. "
+            "Individual masks (comma-combine): fill, dilated-cloud, cirrus, cloud, "
+            "shadow, snow, water. Example: 'cloud,shadow'"
+        ),
     )
     parser.add_argument(
         "--composite",

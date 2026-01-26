@@ -83,13 +83,64 @@ python stac_imagery_download.py \
 
 ## Masking Options
 
-The `--mask` argument supports the following options:
+The `--mask` argument uses the Landsat `qa_pixel` band, a 16-bit packed bitmask where each bit encodes a quality condition. The following table shows all bit definitions:
 
-- `clear-only`: Keep only pixels flagged as clear (recommended)
-- `cloud`: Mask cloud pixels
-- `shadow`: Mask cloud shadow pixels
-- `cirrus`: Mask cirrus cloud pixels
-- Combinations: `cloud,shadow` or `cloud,shadow,cirrus`
+| Bit | Flag | When set (= 1) |
+|-----|------|-----------------|
+| 0 | Fill | Pixel is fill / no data |
+| 1 | Dilated Cloud | Cloud dilation buffer pixel |
+| 2 | Cirrus | High-confidence cirrus |
+| 3 | Cloud | High-confidence cloud |
+| 4 | Cloud Shadow | High-confidence cloud shadow |
+| 5 | Snow | High-confidence snow / ice |
+| 6 | Clear | Pixel is clear (no cloud, shadow, snow, or cirrus) |
+| 7 | Water | Pixel is water |
+| 8–9 | Cloud Confidence | 00=None, 01=Low, 10=Medium, 11=High |
+| 10–11 | Cloud Shadow Confidence | 00=None, 01=Low, 10=Medium, 11=High |
+| 12–13 | Snow/Ice Confidence | 00=None, 01=Low, 10=Medium, 11=High |
+| 14–15 | Cirrus Confidence | 00=None, 01=Low, 10=Medium, 11=High |
+
+### Preset masks
+
+These are mutually exclusive options that define which pixels to **keep**:
+
+| Option | Behaviour |
+|--------|-----------|
+| `clear-only` | Keep only pixels where bit 6 (Clear) = 1. Most restrictive; recommended for compositing. |
+| `clear-only-inc-water` | Keep pixels where bit 6 (Clear) = 1 **or** bit 7 (Water) = 1. Same as `clear-only` but retains water bodies. |
+
+### Individual bit masks
+
+These define which pixels to **remove** (set to NaN). Combine with commas:
+
+| Option | Bit | Removes |
+|--------|-----|---------|
+| `fill` | 0 | Fill / no-data pixels |
+| `dilated-cloud` | 1 | Cloud dilation buffer pixels |
+| `cirrus` | 2 | Cirrus cloud pixels |
+| `cloud` | 3 | Cloud pixels |
+| `shadow` | 4 | Cloud shadow pixels |
+| `snow` | 5 | Snow / ice pixels |
+| `water` | 7 | Water pixels |
+
+### Examples
+
+```bash
+# Most restrictive — clear land only (excludes water)
+--mask clear-only
+
+# Clear land and water (excludes clouds, shadow, snow, cirrus)
+--mask clear-only-inc-water
+
+# Remove clouds and shadows only
+--mask cloud,shadow
+
+# Remove clouds, shadows, and cirrus
+--mask cloud,shadow,cirrus
+
+# Remove clouds, shadows, and snow/ice
+--mask cloud,shadow,snow
+```
 
 ## Output Files
 
