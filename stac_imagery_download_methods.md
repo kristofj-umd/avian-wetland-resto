@@ -24,8 +24,8 @@ Regardless of whether the data is composited into a single multispectral image f
 
 Ultimately, the imagery produced by this tool utlized the temporal composite approach as well as the masking so that only clear pixels as well as those with any water were allowed through.
 
-The imagery is labelled as:
-siteID_date_imageItemID.tif
+The imagery is labelled as:  
+`siteID_date_imageItemID.tif`
 
-The composite imagery is labelled as:
-siteID_startDate-endDate_composite_maskType.tif
+The composite imagery is labelled as:  
+`siteID_startDate-endDate_composite_maskType.tif`
