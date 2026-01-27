@@ -16,7 +16,11 @@ These include:
 
 **Masking** based on the Pixel Quality Assessment Band (`qa_pixel`) to filter out areas considered to be clouds or snow; or, conversely, to only include areas that are considered clear ([see Masking Options for more information](stac_imagery.md#masking-options))
 
-**Compositing** allows for a series of overlapping images to be laid on one another to produce a composite image. The final pixel is the result of whatever operation is applied to all of the contributing pixels. In this case, the _median_ value is used. This is a common approach when creating temporal composites. It also serves as a means of augmenting [the inherent striping of Landsat 7 imagery due to the Scan Line Corrector failure](https://www.usgs.gov/faqs/what-landsat-7-etm-slc-data).
+**Compositing** allows multiple overlapping images to be combined into a single composite image. Each output pixel represents an aggregated value computed from all contributing pixels at that location. This approach uses the _median_ value, which is particularly effective for temporal composites as it:
+
+- Reduces the impact of outliers (e.g., clouds, sensor noise)
+- Preserves real surface features across the time series
+- Mitigates [Landsat 7's inherent striping artifacts caused by Scan Line Corrector failure](https://www.usgs.gov/faqs/what-landsat-7-etm-slc-data)
 
 Regardless of whether the data is composited into a single multispectral image for the given date range or kept as single images per date, the imagery are filtered to only include the surface reflectance bands, clipped to the area of interest, rescaled using a specific scale and offset for each band, and finally, output as a Cloud Optimized GeoTIFF (COG) for quick reading and visualizing.
 
