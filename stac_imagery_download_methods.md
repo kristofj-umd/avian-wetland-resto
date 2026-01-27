@@ -76,8 +76,8 @@ Ultimately, the imagery produced by this tool utlized the temporal composite app
 
 ### Filenames
 
-The imagery is labelled as:
-siteID_date_imageItemID.tif
+The imagery is labelled as:  
+`siteID_date_imageItemID.tif`
 
-The composite imagery is labelled as:
-siteID_startDate-endDate_composite_maskType.tif
+The composite imagery is labelled as:  
+`siteID_startDate-endDate_composite_maskType.tif`
