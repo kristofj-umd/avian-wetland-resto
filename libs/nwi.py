@@ -43,19 +43,40 @@ def _scan_nwi(nwi_path_json: str):
     # print("NWI scan complete")
     return out
 
+def _drop_duplicate_polygons(
+        gdf: gpd.GeoDataFrame, 
+        cols: tuple[str, ...] = ("WETLAND_TYPE", "ATTRIBUTE"), 
+        grid_size: float = 0.1):
+    """Find and remove duplicate polygons within a geodataframe.
+        First occurence is kept.
+
+    Args:
+        gdf (gpd.Geodataframe): input geodataframe that might have duplicate polygons
+        cols (tuple, optional): attribute columns. Defaults to ("WETLAND_TYPE", "ATTRIBUTE").
+        grid (float, optional): grid precision for snapping. Defaults to 0.1.
+    """
+    # snap coordinates to a grid (in CRS units) so that
+    # tiny float differences don't hide a duplicate
+    geom = gdf.geometry.set_precision(grid_size).normalize()
+    # create dup key
+    key = gdf[list(cols)].copy()
+    key["wkb"] = geom.to_wkb()           # bytes, so hashable
+    # find dupes
+    dupes = key.duplicated(keep=False)    # True for every member of a duplicate group
+    print(f"{dupes.sum()} dups discovered out of {len(gdf)} records")
+    # return cleaned gdf
+    return gdf.loc[~key.duplicated(keep="first")]
+    
+
 
 def wetlands_within_buffer(buffer_gs, crs_target: str, nwi_path_json: str):
-    start_time = time.time()
 
     # buffer in target CRS (already is); compute once
-    # print("Scanning NWI files...")
     nwi_index = _scan_nwi(nwi_path_json)
-    # print(f"Scan completed in {time.time() - start_time:.2f} seconds")
 
     candidates = []
-    # print(f"Processing {len(nwi_index)} potential files...")
-    for i, (path, layer, crs_wkt, tb) in enumerate(nwi_index, 1):
-        file_start = time.time()
+    for (path, layer, crs_wkt, tb) in nwi_index:
+
         # bbox test in the file's CRS
         bbox_in_file_crs = tuple(buffer_gs.to_crs(crs_wkt).total_bounds)
         if shapely.box(*bbox_in_file_crs).intersects(shapely.box(*tb)):
@@ -66,29 +87,23 @@ def wetlands_within_buffer(buffer_gs, crs_target: str, nwi_path_json: str):
                 bbox=bbox_in_file_crs,
                 columns=["WETLAND_TYPE", "ATTRIBUTE", "geometry"],
             )
+
             if gdf is not None and not gdf.empty:
                 # keep native file CRS here
                 gdf.set_crs(crs_wkt, inplace=True)
                 candidates.append(gdf)
-                # print(
-                #     f"File {i}/{len(nwi_index)} processed in {time.time() - file_start:.2f} seconds - found wetlands"
-                # )
-        # else:
-        # print(f"File {i}/{len(nwi_index)} skipped (no intersection)")
 
+    # No wetlands found in buffer
     if not candidates:
-        # print("No wetlands found in buffer")
         return None
 
-    # print("Merging and reprojecting results...")
-    merge_start = time.time()
+    # Merging and reprojecting results...
     gdf = gpd.GeoDataFrame(pd.concat(candidates, ignore_index=True))
     # Reproject once to analysis CRS, THEN clip
     gdf = gdf.to_crs(crs_target)
+    # drop duplicate polygons first
+    gdf = _drop_duplicate_polygons(gdf)
     result = gpd.clip(gdf, buffer_gs)  # both in crs_target
-    # print(
-    #     f"Processing completed in {time.time() - start_time:.2f} seconds total"
-    # )
     return result
 
 
@@ -99,9 +114,6 @@ def process_one_nwi(
     crs: str,
     nwi_path_json: str,
 ) -> dict | None:
-
-    start_time = time.time()
-    # print(f"Processing NWI for point with buffer size {buffer_size}m...")
 
     # reproject point to raster CRS - so units match buffer units
     point = point.to_crs(crs)
@@ -118,9 +130,6 @@ def process_one_nwi(
     if gdf is None:
         # print("No wetlands found - exiting")
         return None
-
-    # print("Processing wetlands attributes...")
-    attr_start = time.time()
 
     # iterate over columns
     # find unique values and counts of each column in col_mapping
