@@ -60,9 +60,9 @@ GLFWRA_PATH = "data/GLFWRA_PCL_all.csv"
 
 # NALCMS land cover rasters (static paths on disk)
 NALCMS_PATHS = {
-    2010: "M:/isabel_bird/data/nalcms/land_cover_2010v3_30m_tif/NA_NALCMS_landcover_2010v3_30m/data/NA_NALCMS_landcover_2010v3_30m.tif",
-    2015: "M:/isabel_bird/data/nalcms/land_cover_2015v4_30m_tif/NA_NALCMS_landcover_2015v4_30m/data/NA_NALCMS_landcover_2015v4_30m.tif",
-    2020: "M:/isabel_bird/data/nalcms/land_cover_2020v2_30m_tif/NA_NALCMS_landcover_2020v2_30m/data/NA_NALCMS_landcover_2020v2_30m.tif",
+    2010: "data/nalcms/land_cover_2010v3_30m_tif/NA_NALCMS_landcover_2010v3_30m/data/NA_NALCMS_landcover_2010v3_30m.tif",
+    2015: "data/nalcms/land_cover_2015v4_30m_tif/NA_NALCMS_landcover_2015v4_30m/data/NA_NALCMS_landcover_2015v4_30m.tif",
+    2020: "data/nalcms/land_cover_2020v2_30m_tif/NA_NALCMS_landcover_2020v2_30m/data/NA_NALCMS_landcover_2020v2_30m.tif",
 }
 
 # path to json file that lists all NWI geopackages
