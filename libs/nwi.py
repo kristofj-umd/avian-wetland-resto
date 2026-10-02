@@ -43,30 +43,31 @@ def _scan_nwi(nwi_path_json: str):
     # print("NWI scan complete")
     return out
 
-def _drop_duplicate_polygons(
-        gdf: gpd.GeoDataFrame, 
-        cols: tuple[str, ...] = ("WETLAND_TYPE", "ATTRIBUTE"), 
-        grid_size: float = 0.1):
-    """Find and remove duplicate polygons within a geodataframe.
-        First occurence is kept.
+def _erase_cross_file_overlap(gdf, file_col="_file", min_area=1.0):
+    """Remove overlapping portions of polygons
 
     Args:
-        gdf (gpd.Geodataframe): input geodataframe that might have duplicate polygons
-        cols (tuple, optional): attribute columns. Defaults to ("WETLAND_TYPE", "ATTRIBUTE").
-        grid (float, optional): grid precision for snapping. Defaults to 0.1.
+        gdf (gpd.Geodataframe): input geodataframe
+        file_col (str, optional): group by dataset. Defaults to "_file".
+        min_area (float, optional): min. area for feature to be kept. 
+        Defaults to 1.0.
+
+    Returns:
+        gpd.Geodataframe: cleaned output geodataframe
     """
-    # snap coordinates to a grid (in CRS units) so that
-    # tiny float differences don't hide a duplicate
-    geom = gdf.geometry.set_precision(grid_size).normalize()
-    # create dup key
-    key = gdf[list(cols)].copy()
-    key["wkb"] = geom.to_wkb()           # bytes, so hashable
-    # find dupes
-    dupes = key.duplicated(keep=False)    # True for every member of a duplicate group
-    print(f"{dupes.sum()} dups discovered out of {len(gdf)} records")
-    # return cleaned gdf
-    return gdf.loc[~key.duplicated(keep="first")]
-    
+    kept, covered = [], None
+    # iterate over features, grouping by origin dataset
+    for _, part in gdf.groupby(file_col, sort=True):
+        if covered is not None:
+            part = part.copy()
+            # extract the remaining portion from the overlap
+            part["geometry"] = part.geometry.difference(covered)
+            # drop empty results and tiny slivers
+            part = part[part.area > min_area]   
+        kept.append(part)
+        combined_parts = part.union_all()
+        covered = combined_parts if covered is None else covered.union(combined_parts)
+    return gpd.GeoDataFrame(pd.concat(kept), crs=gdf.crs) 
 
 
 def wetlands_within_buffer(buffer_gs, crs_target: str, nwi_path_json: str):
@@ -87,6 +88,8 @@ def wetlands_within_buffer(buffer_gs, crs_target: str, nwi_path_json: str):
                 bbox=bbox_in_file_crs,
                 columns=["WETLAND_TYPE", "ATTRIBUTE", "geometry"],
             )
+            # tag the file that each feature came from
+            gdf["_file"] = layer
 
             if gdf is not None and not gdf.empty:
                 # keep native file CRS here
@@ -101,9 +104,9 @@ def wetlands_within_buffer(buffer_gs, crs_target: str, nwi_path_json: str):
     gdf = gpd.GeoDataFrame(pd.concat(candidates, ignore_index=True))
     # Reproject once to analysis CRS, THEN clip
     gdf = gdf.to_crs(crs_target)
-    # drop duplicate polygons first
-    gdf = _drop_duplicate_polygons(gdf)
-    result = gpd.clip(gdf, buffer_gs)  # both in crs_target
+    gdf = gpd.clip(gdf, buffer_gs)  # both in crs_target
+    # remove overlapping portions from geometry
+    result = _erase_cross_file_overlap(gdf)
     return result
 
 
