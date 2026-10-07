@@ -94,7 +94,8 @@ def wetlands_within_buffer(buffer_gs, crs_target: str, nwi_path_json: str):
             if gdf is not None and not gdf.empty:
                 # keep native file CRS here
                 gdf.set_crs(crs_wkt, inplace=True)
-                candidates.append(gdf)
+                # reproject and add to candidate list
+                candidates.append(gdf.to_crs(crs_target))
 
     # No wetlands found in buffer
     if not candidates:
@@ -102,9 +103,11 @@ def wetlands_within_buffer(buffer_gs, crs_target: str, nwi_path_json: str):
 
     # Merging and reprojecting results...
     gdf = gpd.GeoDataFrame(pd.concat(candidates, ignore_index=True))
-    # Reproject once to analysis CRS, THEN clip
-    gdf = gdf.to_crs(crs_target)
+    # clip to buffer
     gdf = gpd.clip(gdf, buffer_gs)  # both in crs_target
+    # exit early if clip leaves empty gdf
+    if gdf.empty:
+        return None
     # remove overlapping portions from geometry
     result = _erase_cross_file_overlap(gdf)
     return result
