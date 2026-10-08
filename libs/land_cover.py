@@ -42,13 +42,13 @@ NALCMS_CLASS_LUT = {
     15: "Cropland",
     16: "Barren lands",
     17: "Urban",
-    # 18: "Water",
+    18: "Water",
     19: "Snow and Ice",
 }
 
 # nlcd class lookup table
 NLCD_CLASS_LUT = {
-    # 11: "Open Water",
+    11: "Open Water",
     12: "Perennial Ice/Snow",
     21: "Developed, Open Space",
     22: "Developed, Low Intensity",
