@@ -145,30 +145,27 @@ def process_one_nwi(
     # calculate area once
     gdf["area_m2"] = gdf.geometry.area
     total_area = gdf["area_m2"].sum()
-    # value counts + grouped sums w/o per-group lambda:
+    # record total wetland area in the buffer
+    # 0 = covered but no wetlands, NaN = not covered
+    result[f"{_nice_string_to_name(f'{source}_buff{buffer_size}')}_total_area"] = \
+        float(total_area)
+    # summarize count, area, and percent of total area for each class
     for src_col, short in col_mapping.items():
-        col_start = time.time()
-        # Get value counts (frequencies) for each class in the source column
-        vc = gdf[src_col].value_counts(sort=False)
-        # Calculate total area for each class by grouping and summing
-        sums = gdf.groupby(src_col, observed=True)["area_m2"].sum()
-        # Calculate percentage of total area for each class
-        pct = sums / total_area
-        # For each unique value in the source column
-        for val in vc.index:
-            # Create the output metric name using the source, buffer size, column shortname and value
-            name = f"{source}_buff{buffer_size}_{short}_{val}"
-            # Store count of occurrences for this value
-            result[f"{_nice_string_to_name(name)}_count"] = int(vc[val])
-            # Store total area for this value
-            result[f"{_nice_string_to_name(name)}_area"] = float(sums[val])
-            # Store percentage of total area for this value
-            result[f"{_nice_string_to_name(name)}_percent"] = float(pct[val])
-        # print(
-        #     f"Column {src_col} processed in {time.time() - col_start:.2f} seconds"
-        # )
+        # group polygons by class; count polygons and sum their area in one pass
+        stats = gdf.groupby(src_col, observed=True)["area_m2"].agg(
+            count="size",  # number of polygons in each class
+            area="sum",    # total area (m2) of each class
+        )
+        # percent of total wetland area occupied by each class
+        stats["percent"] = stats["area"] / total_area
 
-    # print(
-    #     f"Total processing completed in {time.time() - start_time:.2f} seconds"
-    # )
+        # one row per class: (class value, count, area, percent)
+        for val, count, area, percent in stats.itertuples():
+            # build the output column name, e.g. nwi_buff500_code_r2ubh
+            name = _nice_string_to_name(f"{source}_buff{buffer_size}_{short}_{val}")
+            # store the stats; cast numpy types to plain Python for clean CSV output
+            result[f"{name}_count"] = int(count)
+            result[f"{name}_area"] = float(area)
+            result[f"{name}_percent"] = float(percent)
+
     return result
