@@ -65,7 +65,7 @@ NLCD_CLASS_LUT = {
     90: "Woody Wetlands",
     95: "Emergent Herbaceous Wetlands",
     # Optional (present in metadata legend):
-    250: "NoData",
+    # 250: "NoData",
 }
 
 # ----- FUNCTIONS -----
