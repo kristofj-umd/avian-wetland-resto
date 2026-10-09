@@ -256,8 +256,6 @@ def process_one_landcover(
     nalcms_paths: dict[int, str] | dict = {},
     aws_sesh: AWSSession | None = None,
 ) -> dict:
-    start_time = time.time()
-    # print(f"Starting landcover processing for {source}, year {year}...")
 
     # Initialize empty result dict
     result = {}
@@ -266,9 +264,9 @@ def process_one_landcover(
         # get raster values for buffer
         if source == "nlcd":
             if year not in nlcd_paths:
-                # print(f"Year {year} not found in NLCD paths")
+                # Year {year} not found in NLCD paths
                 return result
-            # print("Extracting NLCD buffer values...")
+            # "Extracting NLCD buffer values...
             if aws_sesh is None:
                 raise ValueError("AWS session is required for NLCD data access")
             vals, area_per_pixel = nlcd_buffer_clip(
@@ -276,19 +274,19 @@ def process_one_landcover(
             )
         else:
             if year not in nalcms_paths:
-                # print(f"Year {year} not found in NALCMS paths")
+                # Year {year} not found in NALCMS paths
                 return result
-            # print("Extracting NALCMS buffer values...")
+            # "Extracting NALCMS buffer values...
             vals, area_per_pixel = nalcms_buffer_clip(
                 point, buffer_size, year, nalcms_paths
             )
 
         # Check if we got any valid values
         if vals is None or len(vals) == 0:
-            # print("No valid values found in buffer")
+            # "No valid values found in buffer
             return result
 
-        # print("Calculating class statistics...")
+        # "Calculating class statistics...
         # get count by class
         unique_values, counts = np.unique(vals, return_counts=True)
         class_counts = dict(zip(unique_values, counts))
@@ -296,15 +294,13 @@ def process_one_landcover(
         # calculate percent of total area occupied by each class
         total = np.sum(counts)
         if total == 0:
-            # print("Total count is zero")
+            # "Total count is zero
             return result
-
-        class_percents = {k: v / total for k, v in class_counts.items()}
 
         # Use appropriate lookup table
         lut = NLCD_CLASS_LUT if source == "nlcd" else NALCMS_CLASS_LUT
 
-        # print("Building result dictionary...")
+        # Building result dictionary...
         # iterate over unique values and update dict with count, percent
         for val, name in lut.items():
             n = class_counts.get(val, 0)
