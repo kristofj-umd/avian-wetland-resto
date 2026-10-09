@@ -306,21 +306,13 @@ def process_one_landcover(
 
         # print("Building result dictionary...")
         # iterate over unique values and update dict with count, percent
-        for val in [v for v in unique_values if v in lut.keys()]:
-            result.update(
-                {
-                    f"{source}_buff{buffer_size}_yr{year}_{_nice_string_to_name(lut[val])}_count": class_counts[
-                        val
-                    ],
-                    f"{source}_buff{buffer_size}_yr{year}_{_nice_string_to_name(lut[val])}_area": class_counts[
-                        val
-                    ]
-                    * area_per_pixel,
-                    f"{source}_buff{buffer_size}_yr{year}_{_nice_string_to_name(lut[val])}_percent": class_percents[
-                        val
-                    ],
-                }
-            )
+        for val, name in lut.items():
+            n = class_counts.get(val, 0)
+            stem = f"{source}_buff{buffer_size}_yr{year}_{_nice_string_to_name(name)}"
+            result[f"{stem}_count"] = n
+            result[f"{stem}_area"] = n * area_per_pixel
+            result[f"{stem}_percent"] = n / total
+
 
         # print(
         #     f"Landcover processing completed in {time.time() - start_time:.2f} seconds"
