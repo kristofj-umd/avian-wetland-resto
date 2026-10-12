@@ -255,6 +255,7 @@ def process_one_landcover(
     nlcd_paths: dict[int, str] | dict = {},
     nalcms_paths: dict[int, str] | dict = {},
     aws_sesh: AWSSession | None = None,
+    coverage_min: float = 0.9,  # minimum fraction of buffer that must have valid data
 ) -> dict:
 
     # Initialize empty result dict
@@ -285,6 +286,13 @@ def process_one_landcover(
         if vals is None or len(vals) == 0:
             # "No valid values found in buffer
             return result
+
+        # check that enough of the buffer has data (e.g. NLCD stops at the Canadian border)
+        expected_pixels = np.pi * buffer_size**2 / area_per_pixel
+        if len(vals) / expected_pixels < coverage_min:
+            # too little coverage -> empty result -> whole block is NaN
+            return result
+
 
         # "Calculating class statistics...
         # get count by class

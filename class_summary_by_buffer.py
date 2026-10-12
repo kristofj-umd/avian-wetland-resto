@@ -54,6 +54,9 @@ BUFFERS = [200, 500, 1000, 2000]
 # land cover years
 YEARS = [2010, 2015, 2020, 2023]
 
+# minimum fraction of buffer that must have valid data
+COVERAGE_MIN = 0.9
+
 # project CRS used for buffering/intersection with NWI, etc.
 PROJECT_CRS = "EPSG:5070"
 
@@ -120,7 +123,11 @@ def _scan_nwi(nwi_path_json: str):
 
 # build_nwi_coverage.py  (run once, or when NWI data is updated)
 def _load_or_build_nwi_coverage(nwi_paths: list[str], nwi_coverage_path: str = NWI_COVERAGE_PATH):
-    # get parts list
+
+    # reuse the cached coverage if it exists
+    if Path(nwi_coverage_path).exists():
+        return gpd.read_file(nwi_coverage_path)
+    
     parts = []
     # iterate over geopackages
     for gpkg_str in nwi_paths:
@@ -133,18 +140,16 @@ def _load_or_build_nwi_coverage(nwi_paths: list[str], nwi_coverage_path: str = N
         parts.append(meta.to_crs(PROJECT_CRS).make_valid())
     coverage = gpd.GeoDataFrame(geometry=pd.concat(parts).geometry, crs=PROJECT_CRS).dissolve()
     coverage = coverage.explode(index_parts=False)     # separate parts -> spatial index works well
-    # save to file if it doesn't exist
-    if not Path(nwi_coverage_path).exists():
-        coverage.to_file(NWI_COVERAGE_PATH, layer="coverage")
-
+    # save coverage to file
+    coverage.to_file(nwi_coverage_path, layer="coverage")
     return coverage
 
 def wetland_setup():
     # index NWI geopackages
     nwi_index = _scan_nwi(NWI_PATH_JSON)
     # build NWI coverage for quick spatial indexing
-    coverage = _load_or_build_nwi_coverage(nwi_index, NWI_COVERAGE_PATH)
-    return {nwi_index, coverage}
+    coverage = _load_or_build_nwi_coverage([p for p, *_ in nwi_index], NWI_COVERAGE_PATH)
+    return nwi_index, coverage
 
 
 # -----------------------------------------------------------------------------
@@ -215,6 +220,7 @@ def process_source_locations(
                     source="nlcd",
                     nlcd_paths=nlcd_paths,
                     aws_sesh=nlcd_sesh,
+                    coverage_min=COVERAGE_MIN,
                 )
                 if nlcd_result is not None:
                     row_dicts.append(nlcd_result)
@@ -226,6 +232,7 @@ def process_source_locations(
                     year=year,
                     source="nalcms",
                     nalcms_paths=NALCMS_PATHS,
+                    coverage_min=COVERAGE_MIN,
                 )
                 if nalcms_result is not None:
                     row_dicts.append(nalcms_result)
@@ -238,6 +245,7 @@ def process_source_locations(
                 crs=PROJECT_CRS,
                 nwi_index=nwi_index,
                 nwi_coverage=nwi_coverage,
+                coverage_min=COVERAGE_MIN,
             )
             if nwi_result is not None:
                 row_dicts.append(nwi_result)
