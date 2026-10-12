@@ -11,18 +11,11 @@ import numpy as np
 import pytest
 from shapely.geometry import Point, box
 
-import class_summary_by_buffer as pipeline
 from conftest import CRS, LAT, LON, wetlands_gdf
-from libs.nwi import _coverage_fraction, process_one_nwi
+from libs.nwi import _coverage_fraction, _load_or_build_nwi_coverage, process_one_nwi
 
 BUFFER = 500
 TOTAL_COL = f"nwi_buff{BUFFER}_total_area"
-
-
-@pytest.fixture(autouse=True)
-def _isolate_coverage_cache(tmp_path, monkeypatch):
-    # never let a test write to (or read from) the real data/nwi_coverage.gpkg
-    monkeypatch.setattr(pipeline, "NWI_COVERAGE_PATH", str(tmp_path / "default_cov.gpkg"))
 
 
 def _buffer(cx, cy, r=BUFFER):
@@ -134,7 +127,7 @@ def two_state_meta(center, make_nwi):
 
 def test_build_coverage_dissolves_states(tmp_path, two_state_meta):
     nwi, expected = two_state_meta
-    cov = pipeline._load_or_build_nwi_coverage(nwi.paths, str(tmp_path / "cov.gpkg"))
+    cov = _load_or_build_nwi_coverage(nwi.paths, str(tmp_path / "cov.gpkg"), CRS)
     assert cov.crs == CRS
     assert cov.area.sum() == pytest.approx(expected.area)          # overlap counted once
     assert cov.area.sum() == pytest.approx(cov.union_all().area)   # parts don't overlap
@@ -143,7 +136,7 @@ def test_build_coverage_dissolves_states(tmp_path, two_state_meta):
 def test_build_coverage_writes_cache_to_given_path(tmp_path, two_state_meta):
     nwi, _ = two_state_meta
     cache = tmp_path / "cov.gpkg"
-    pipeline._load_or_build_nwi_coverage(nwi.paths, str(cache))
+    _load_or_build_nwi_coverage(nwi.paths, str(cache), CRS)
     assert cache.exists()
 
 
@@ -155,11 +148,14 @@ def test_existing_cache_is_loaded_not_rebuilt(tmp_path, center, two_state_meta):
     cache = tmp_path / "cov.gpkg"
     _coverage(cached).to_file(cache, layer="coverage")
 
-    cov = pipeline._load_or_build_nwi_coverage(nwi.paths, str(cache))
+    cov = _load_or_build_nwi_coverage(nwi.paths, str(cache), CRS)
     assert cov.area.sum() == pytest.approx(cached.area)
 
 
 def test_wetland_setup_returns_index_and_coverage(tmp_path, monkeypatch, two_state_meta):
+    # the pipeline script pulls in rasterio/boto3, so import it only for this test
+    import class_summary_by_buffer as pipeline
+
     nwi, expected = two_state_meta
     monkeypatch.setattr(pipeline, "NWI_PATH_JSON", nwi.json)
     monkeypatch.setattr(pipeline, "NWI_COVERAGE_PATH", str(tmp_path / "cov.gpkg"))
