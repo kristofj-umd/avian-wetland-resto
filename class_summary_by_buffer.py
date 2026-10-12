@@ -26,14 +26,11 @@ from __future__ import annotations
 # standard lib
 import os
 from pathlib import Path
-from functools import lru_cache
-import json
 
 # external deps
 import geopandas as gpd
 import pandas as pd
 from tqdm.auto import tqdm
-import pyogrio as po
 
 # local project imports
 from libs.land_cover import (
@@ -41,7 +38,7 @@ from libs.land_cover import (
     process_one_landcover,
     get_nlcd_paths,
 )
-from libs.nwi import process_one_nwi
+from libs.nwi import process_one_nwi, _scan_nwi, _load_or_build_nwi_coverage
 
 
 # -----------------------------------------------------------------------------
@@ -95,60 +92,11 @@ BIRD_LOCS_FIELD_MAPPING = {
 # Wetland Setup
 # -----------------------------------------------------------------------------
 
-def _load_json(path: Path) -> dict:
-    with open(path, "r") as f:
-        return json.load(f)
-
-
-@lru_cache(maxsize=1)
-def _scan_nwi(nwi_path_json: str):
-    """One-time scan of gpkg files → [(path, layer_name, crs_wkt, total_bounds)]."""
-    # print(f"Loading NWI paths from {nwi_path_json}")
-    # Load JSON file containing paths to GPKG files
-    gpkg_paths = _load_json(Path(nwi_path_json))
-    # print(f"Found {len(gpkg_paths)} GPKG files to process")
-    out = []
-    # Process each GPKG path
-    for i, gpkg_str in enumerate(gpkg_paths, 1):
-        # print(f"Processing file {i}/{len(gpkg_paths)}: {gpkg_str}")
-        gpkg = Path(gpkg_str)
-        # Extract layer name from filename (e.g., "NY_Wetlands" from "NY_xxx.gpkg")
-        layer = f"{gpkg.stem.split('_')[0]}_Wetlands"
-        # Read metadata (CRS and bounds) from GPKG without loading full data
-        info = po.read_info(gpkg, layer=layer)
-        # Store tuple of (path, layer, CRS, bounds) for each GPKG
-        out.append((str(gpkg), layer, info["crs"], tuple(info["total_bounds"])))
-    # print("NWI scan complete")
-    return out
-
-# build_nwi_coverage.py  (run once, or when NWI data is updated)
-def _load_or_build_nwi_coverage(nwi_paths: list[str], nwi_coverage_path: str = NWI_COVERAGE_PATH):
-
-    # reuse the cached coverage if it exists
-    if Path(nwi_coverage_path).exists():
-        return gpd.read_file(nwi_coverage_path)
-    
-    parts = []
-    # iterate over geopackages
-    for gpkg_str in nwi_paths:
-        # get path to geopackage
-        gpkg = Path(gpkg_str)
-        # Extract layer name from filename (e.g., "NY_Wetlands" from "NY_xxx.gpkg")
-        state = gpkg.stem.split('_')[0]
-        layer = f"{state}_Wetlands_Project_Metadata"
-        meta = gpd.read_file(gpkg, layer=layer)        # + filter on status field, if any (step 0)
-        parts.append(meta.to_crs(PROJECT_CRS).make_valid())
-    coverage = gpd.GeoDataFrame(geometry=pd.concat(parts).geometry, crs=PROJECT_CRS).dissolve()
-    coverage = coverage.explode(index_parts=False)     # separate parts -> spatial index works well
-    # save coverage to file
-    coverage.to_file(nwi_coverage_path, layer="coverage")
-    return coverage
-
 def wetland_setup():
     # index NWI geopackages
     nwi_index = _scan_nwi(NWI_PATH_JSON)
     # build NWI coverage for quick spatial indexing
-    coverage = _load_or_build_nwi_coverage([p for p, *_ in nwi_index], NWI_COVERAGE_PATH)
+    coverage = _load_or_build_nwi_coverage([p for p, *_ in nwi_index], NWI_COVERAGE_PATH, PROJECT_CRS)
     return nwi_index, coverage
 
 
