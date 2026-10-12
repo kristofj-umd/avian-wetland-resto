@@ -4,6 +4,7 @@ import geopandas as gpd
 import pandas as pd
 from geopandas.array import GeometryArray
 import shapely
+import pyogrio as po
 
 from .utils import _nice_string_to_name
 import time
