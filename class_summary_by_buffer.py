@@ -70,6 +70,8 @@ NALCMS_PATHS = {
 
 # path to json file that lists all NWI geopackages
 NWI_PATH_JSON = "data/nwi_filelist.json"
+# path to NWI coverage file (used for determining if site buffer was covered by wetland data)
+NWI_COVERAGE_PATH = "data/nwi_coverage.gpkg"
 
 # output directory
 OUTPUT_DIR = Path("data/output")
@@ -117,7 +119,7 @@ def _scan_nwi(nwi_path_json: str):
     return out
 
 # build_nwi_coverage.py  (run once, or when NWI data is updated)
-def _build_nwi_coverage(nwi_paths: list[str]):
+def _load_or_build_nwi_coverage(nwi_paths: list[str], nwi_coverage_path: str = NWI_COVERAGE_PATH):
     # get parts list
     parts = []
     # iterate over geopackages
@@ -131,14 +133,18 @@ def _build_nwi_coverage(nwi_paths: list[str]):
         parts.append(meta.to_crs(PROJECT_CRS).make_valid())
     coverage = gpd.GeoDataFrame(geometry=pd.concat(parts).geometry, crs=PROJECT_CRS).dissolve()
     coverage = coverage.explode(index_parts=False)     # separate parts -> spatial index works well
-    coverage.to_file(OUTPUT_DIR / "nwi_coverage.gpkg", layer="coverage")
+    # save to file if it doesn't exist
+    if not Path(nwi_coverage_path).exists():
+        coverage.to_file(NWI_COVERAGE_PATH, layer="coverage")
+
+    return coverage
 
 def wetland_setup():
     # index NWI geopackages
     nwi_index = _scan_nwi(NWI_PATH_JSON)
     # build NWI coverage for quick spatial indexing
-    _build_nwi_coverage(nwi_index)
-    return nwi_index    
+    coverage = _load_or_build_nwi_coverage(nwi_index, NWI_COVERAGE_PATH)
+    return {nwi_index, coverage}
 
 
 # -----------------------------------------------------------------------------
@@ -150,6 +156,7 @@ def process_source_locations(
     nlcd_paths: dict,
     nlcd_sesh,
     nwi_index: list,
+    nwi_coverage: gpd.GeoDataFrame,
 ) -> pd.DataFrame:
     """
     For each row in df:
@@ -230,6 +237,7 @@ def process_source_locations(
                 source="nwi",
                 crs=PROJECT_CRS,
                 nwi_index=nwi_index,
+                nwi_coverage=nwi_coverage,
             )
             if nwi_result is not None:
                 row_dicts.append(nwi_result)
@@ -264,7 +272,7 @@ def main():
     # Step 3. Prep NLCD session + path lookup
     nlcd_sesh = nlcd_sesh_setup()
     nlcd_paths = get_nlcd_paths()
-    nwi_index = wetland_setup()
+    nwi_index, coverage = wetland_setup()
 
     # Step 4. Process GLFWRA
     glfwra_results = process_source_locations(
@@ -273,6 +281,7 @@ def main():
         nlcd_paths=nlcd_paths,
         nlcd_sesh=nlcd_sesh,
         nwi_index=nwi_index,
+        nwi_coverage=coverage,
     )
     print("Completed processing for GLFWRA. Writing CSV...")
     glfwra_outpath = OUTPUT_DIR / "glfwra_class_summary_by_buffer.csv"
@@ -285,6 +294,7 @@ def main():
         nlcd_paths=nlcd_paths,
         nlcd_sesh=nlcd_sesh,
         nwi_index=nwi_index,
+        nwi_coverage=coverage,
     )
     print("Completed processing for CWMP. Writing CSV...")
     cwmp_outpath = OUTPUT_DIR / "cwmp_class_summary_by_buffer.csv"

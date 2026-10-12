@@ -15,6 +15,11 @@ col_mapping = {
 
 # METHODS
 
+def _coverage_fraction(buffer_gs, coverage) -> float:
+    # share of the buffer inside the NWI-mapped area (0..1)
+    covered = gpd.clip(coverage, buffer_gs).area.sum()  # clip uses the spatial index
+    return covered / buffer_gs.area.sum()
+
 def _erase_cross_file_overlap(gdf, file_col="_file", min_area=1.0):
     """Remove overlapping portions of polygons
 
@@ -88,23 +93,26 @@ def process_one_nwi(
     source: str,
     crs: str,
     nwi_index: list,
+    nwi_coverage: gpd.GeoDataFrame,
 ) -> dict | None:
 
     # reproject point to raster CRS - so units match buffer units
     point = point.to_crs(crs)
     # create buffer as GeoSeries from point
     buffer = gpd.GeoSeries(point, crs=crs).buffer(buffer_size)
-    # print(
-    #     f"Buffer creation completed in {time.time() - start_time:.2f} seconds"
-    # )
+
+    # test for coverage
+    # if buffer is not covered by wetland data it should return NaN, not zero
+    total_col = f"{_nice_string_to_name(f'{source}_buff{buffer_size}')}_total_area"
+    if _coverage_fraction(buffer, nwi_coverage) == 0:
+        return None
 
     # get wetlands within bbox
     gdf = wetlands_within_buffer(buffer, crs, nwi_index)
 
-    # exit early if no wetlands found
+    # exit with zero if buffer within coverage but no intersecting wetlands
     if gdf is None:
-        # print("No wetlands found - exiting")
-        return None
+        return {total_col: 0.0}
 
     # iterate over columns
     # find unique values and counts of each column in col_mapping
@@ -116,8 +124,7 @@ def process_one_nwi(
     total_area = gdf["area_m2"].sum()
     # record total wetland area in the buffer
     # 0 = covered but no wetlands, NaN = not covered
-    result[f"{_nice_string_to_name(f'{source}_buff{buffer_size}')}_total_area"] = \
-        float(total_area)
+    result[total_col] = float(total_area)
     # summarize count, area, and percent of total area for each class
     for src_col, short in col_mapping.items():
         # group polygons by class; count polygons and sum their area in one pass
