@@ -257,6 +257,13 @@ def process_source_locations(
     )
     results_df = df.join(new_cols_df)
 
+    # backfill zeroes in NWI class columns for buffers with no wetlands
+    for b in BUFFERS:
+        covered = results_df[f"nwi_buff{b}_total_area"].notna()
+        cols = [c for c in results_df.columns
+                if c.startswith((f"nwi_buff{b}_code_", f"nwi_buff{b}_type_"))]
+        results_df.loc[covered, cols] = results_df.loc[covered, cols].fillna(0)
+
     return results_df
 
 
