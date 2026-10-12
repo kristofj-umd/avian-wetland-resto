@@ -104,7 +104,8 @@ def process_one_nwi(
     # test for coverage
     # if buffer is not covered by wetland data it should return NaN, not zero
     total_col = f"{_nice_string_to_name(f'{source}_buff{buffer_size}')}_total_area"
-    if _coverage_fraction(buffer, nwi_coverage) == 0:
+    # use 90% coverage to allow for rounding effects
+    if _coverage_fraction(buffer, nwi_coverage) == 0.9:
         return None
 
     # get wetlands within bbox
