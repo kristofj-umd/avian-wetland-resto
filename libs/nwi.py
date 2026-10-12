@@ -17,6 +17,10 @@ col_mapping = {
 
 # METHODS
 
+# -----------------------------------------------------------------------------
+# Wetland Setup
+# -----------------------------------------------------------------------------
+
 def _load_json(path: Path) -> dict:
     with open(path, "r") as f:
         return json.load(f)
@@ -65,6 +69,17 @@ def _load_or_build_nwi_coverage(nwi_paths: list[str], nwi_coverage_path: str, cr
     coverage.to_file(nwi_coverage_path, layer="coverage")
     return coverage
 
+def wetland_setup(
+        nwi_path_json: str, 
+        nwi_coverage_path: str, 
+        crs: str,
+    ):
+    # index NWI geopackages
+    nwi_index = _scan_nwi(nwi_path_json)
+    # build NWI coverage for quick spatial indexing
+    coverage = _load_or_build_nwi_coverage([p for p, *_ in nwi_index], nwi_coverage_path, crs)
+    return nwi_index, coverage
+
 def _coverage_fraction(buffer_gs, coverage) -> float:
     # share of the buffer inside the NWI-mapped area (0..1)
     covered = gpd.clip(coverage, buffer_gs).area.sum()  # clip uses the spatial index
@@ -95,7 +110,6 @@ def _erase_cross_file_overlap(gdf, file_col="_file", min_area=1.0):
         combined_parts = part.union_all()
         covered = combined_parts if covered is None else covered.union(combined_parts)
     return gpd.GeoDataFrame(pd.concat(kept), crs=gdf.crs) 
-
 
 def wetlands_within_buffer(buffer_gs, crs_target: str, nwi_index: list):
 

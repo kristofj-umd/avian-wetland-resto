@@ -38,7 +38,7 @@ from libs.land_cover import (
     process_one_landcover,
     get_nlcd_paths,
 )
-from libs.nwi import process_one_nwi, _scan_nwi, _load_or_build_nwi_coverage
+from libs.nwi import process_one_nwi, wetland_setup
 
 
 # -----------------------------------------------------------------------------
@@ -87,17 +87,6 @@ BIRD_LOCS_FIELD_MAPPING = {
         "lon": "Lon",
     },
 }
-
-# -----------------------------------------------------------------------------
-# Wetland Setup
-# -----------------------------------------------------------------------------
-
-def wetland_setup():
-    # index NWI geopackages
-    nwi_index = _scan_nwi(NWI_PATH_JSON)
-    # build NWI coverage for quick spatial indexing
-    coverage = _load_or_build_nwi_coverage([p for p, *_ in nwi_index], NWI_COVERAGE_PATH, PROJECT_CRS)
-    return nwi_index, coverage
 
 
 # -----------------------------------------------------------------------------
@@ -242,7 +231,7 @@ def main():
     # Step 3. Prep NLCD session + path lookup
     nlcd_sesh = nlcd_sesh_setup()
     nlcd_paths = get_nlcd_paths()
-    nwi_index, coverage = wetland_setup()
+    nwi_index, coverage = wetland_setup(NWI_PATH_JSON, NWI_COVERAGE_PATH, PROJECT_CRS)
 
     # Step 4. Process GLFWRA
     glfwra_results = process_source_locations(
