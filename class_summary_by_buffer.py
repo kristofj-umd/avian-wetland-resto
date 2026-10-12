@@ -267,9 +267,16 @@ def process_source_locations(
 
     # backfill zeroes in NWI class columns for buffers with no wetlands
     for b in BUFFERS:
+        total_col = f"nwi_buff{b}_total_area"
+        # skip this buffer if the total area column is not present
+        if total_col not in results_df.columns:
+            continue
+        # only fill zeros for buffers that have some coverage
         covered = results_df[f"nwi_buff{b}_total_area"].notna()
+        # get all columns related to this buffer's NWI classes
         cols = [c for c in results_df.columns
                 if c.startswith((f"nwi_buff{b}_code_", f"nwi_buff{b}_type_"))]
+        # fill zeros for all NWI class columns where the buffer has coverage but no wetlands
         results_df.loc[covered, cols] = results_df.loc[covered, cols].fillna(0)
 
     return results_df
