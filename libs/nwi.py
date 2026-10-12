@@ -1,10 +1,7 @@
 from pathlib import Path
-from functools import lru_cache
-import json
 
 import geopandas as gpd
 import pandas as pd
-import pyogrio as po
 from geopandas.array import GeometryArray
 import shapely
 
@@ -16,32 +13,7 @@ col_mapping = {
     "ATTRIBUTE": "code",
 }
 
-
-def _load_json(path: Path) -> dict:
-    with open(path, "r") as f:
-        return json.load(f)
-
-
-@lru_cache(maxsize=1)
-def _scan_nwi(nwi_path_json: str):
-    """One-time scan of gpkg files → [(path, layer_name, crs_wkt, total_bounds)]."""
-    # print(f"Loading NWI paths from {nwi_path_json}")
-    # Load JSON file containing paths to GPKG files
-    gpkg_paths = _load_json(Path(nwi_path_json))
-    # print(f"Found {len(gpkg_paths)} GPKG files to process")
-    out = []
-    # Process each GPKG path
-    for i, gpkg_str in enumerate(gpkg_paths, 1):
-        # print(f"Processing file {i}/{len(gpkg_paths)}: {gpkg_str}")
-        gpkg = Path(gpkg_str)
-        # Extract layer name from filename (e.g., "NY_Wetlands" from "NY_xxx.gpkg")
-        layer = f"{gpkg.stem.split('_')[0]}_Wetlands"
-        # Read metadata (CRS and bounds) from GPKG without loading full data
-        info = po.read_info(gpkg, layer=layer)
-        # Store tuple of (path, layer, CRS, bounds) for each GPKG
-        out.append((str(gpkg), layer, info["crs"], tuple(info["total_bounds"])))
-    # print("NWI scan complete")
-    return out
+# METHODS
 
 def _erase_cross_file_overlap(gdf, file_col="_file", min_area=1.0):
     """Remove overlapping portions of polygons
@@ -70,10 +42,7 @@ def _erase_cross_file_overlap(gdf, file_col="_file", min_area=1.0):
     return gpd.GeoDataFrame(pd.concat(kept), crs=gdf.crs) 
 
 
-def wetlands_within_buffer(buffer_gs, crs_target: str, nwi_path_json: str):
-
-    # buffer in target CRS (already is); compute once
-    nwi_index = _scan_nwi(nwi_path_json)
+def wetlands_within_buffer(buffer_gs, crs_target: str, nwi_index: list):
 
     candidates = []
     for (path, layer, crs_wkt, tb) in nwi_index:
@@ -118,7 +87,7 @@ def process_one_nwi(
     buffer_size: int,
     source: str,
     crs: str,
-    nwi_path_json: str,
+    nwi_index: list,
 ) -> dict | None:
 
     # reproject point to raster CRS - so units match buffer units
@@ -130,7 +99,7 @@ def process_one_nwi(
     # )
 
     # get wetlands within bbox
-    gdf = wetlands_within_buffer(buffer, crs, nwi_path_json)
+    gdf = wetlands_within_buffer(buffer, crs, nwi_index)
 
     # exit early if no wetlands found
     if gdf is None:

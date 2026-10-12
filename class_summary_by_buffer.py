@@ -26,11 +26,14 @@ from __future__ import annotations
 # standard lib
 import os
 from pathlib import Path
+from functools import lru_cache
+import json
 
 # external deps
 import geopandas as gpd
 import pandas as pd
 from tqdm.auto import tqdm
+import pyogrio as po
 
 # local project imports
 from libs.land_cover import (
@@ -83,6 +86,60 @@ BIRD_LOCS_FIELD_MAPPING = {
     },
 }
 
+# -----------------------------------------------------------------------------
+# Wetland Setup
+# -----------------------------------------------------------------------------
+
+def _load_json(path: Path) -> dict:
+    with open(path, "r") as f:
+        return json.load(f)
+
+
+@lru_cache(maxsize=1)
+def _scan_nwi(nwi_path_json: str):
+    """One-time scan of gpkg files → [(path, layer_name, crs_wkt, total_bounds)]."""
+    # print(f"Loading NWI paths from {nwi_path_json}")
+    # Load JSON file containing paths to GPKG files
+    gpkg_paths = _load_json(Path(nwi_path_json))
+    # print(f"Found {len(gpkg_paths)} GPKG files to process")
+    out = []
+    # Process each GPKG path
+    for i, gpkg_str in enumerate(gpkg_paths, 1):
+        # print(f"Processing file {i}/{len(gpkg_paths)}: {gpkg_str}")
+        gpkg = Path(gpkg_str)
+        # Extract layer name from filename (e.g., "NY_Wetlands" from "NY_xxx.gpkg")
+        layer = f"{gpkg.stem.split('_')[0]}_Wetlands"
+        # Read metadata (CRS and bounds) from GPKG without loading full data
+        info = po.read_info(gpkg, layer=layer)
+        # Store tuple of (path, layer, CRS, bounds) for each GPKG
+        out.append((str(gpkg), layer, info["crs"], tuple(info["total_bounds"])))
+    # print("NWI scan complete")
+    return out
+
+# build_nwi_coverage.py  (run once, or when NWI data is updated)
+def _build_nwi_coverage(nwi_paths: list[str]):
+    # get parts list
+    parts = []
+    # iterate over geopackages
+    for gpkg_str in nwi_paths:
+        # get path to geopackage
+        gpkg = Path(gpkg_str)
+        # Extract layer name from filename (e.g., "NY_Wetlands" from "NY_xxx.gpkg")
+        state = gpkg.stem.split('_')[0]
+        layer = f"{state}_Wetlands_Project_Metadata"
+        meta = gpd.read_file(gpkg, layer=layer)        # + filter on status field, if any (step 0)
+        parts.append(meta.to_crs(PROJECT_CRS).make_valid())
+    coverage = gpd.GeoDataFrame(geometry=pd.concat(parts).geometry, crs=PROJECT_CRS).dissolve()
+    coverage = coverage.explode(index_parts=False)     # separate parts -> spatial index works well
+    coverage.to_file(OUTPUT_DIR / "nwi_coverage.gpkg", layer="coverage")
+
+def wetland_setup():
+    # index NWI geopackages
+    nwi_index = _scan_nwi(NWI_PATH_JSON)
+    # build NWI coverage for quick spatial indexing
+    _build_nwi_coverage(nwi_index)
+    return nwi_index    
+
 
 # -----------------------------------------------------------------------------
 # CORE LOGIC
@@ -92,6 +149,7 @@ def process_source_locations(
     df: pd.DataFrame,
     nlcd_paths: dict,
     nlcd_sesh,
+    nwi_index: list,
 ) -> pd.DataFrame:
     """
     For each row in df:
@@ -171,7 +229,7 @@ def process_source_locations(
                 buffer_size=buffer_size,
                 source="nwi",
                 crs=PROJECT_CRS,
-                nwi_path_json=NWI_PATH_JSON,
+                nwi_index=nwi_index,
             )
             if nwi_result is not None:
                 row_dicts.append(nwi_result)
@@ -206,6 +264,7 @@ def main():
     # Step 3. Prep NLCD session + path lookup
     nlcd_sesh = nlcd_sesh_setup()
     nlcd_paths = get_nlcd_paths()
+    nwi_index = wetland_setup()
 
     # Step 4. Process GLFWRA
     glfwra_results = process_source_locations(
@@ -213,6 +272,7 @@ def main():
         df=glfwra_df,
         nlcd_paths=nlcd_paths,
         nlcd_sesh=nlcd_sesh,
+        nwi_index=nwi_index,
     )
     print("Completed processing for GLFWRA. Writing CSV...")
     glfwra_outpath = OUTPUT_DIR / "glfwra_class_summary_by_buffer.csv"
@@ -224,6 +284,7 @@ def main():
         df=cwmp_df,
         nlcd_paths=nlcd_paths,
         nlcd_sesh=nlcd_sesh,
+        nwi_index=nwi_index,
     )
     print("Completed processing for CWMP. Writing CSV...")
     cwmp_outpath = OUTPUT_DIR / "cwmp_class_summary_by_buffer.csv"
