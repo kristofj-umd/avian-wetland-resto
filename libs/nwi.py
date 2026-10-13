@@ -200,8 +200,8 @@ def process_one_nwi(
             count="size",  # number of polygons in each class
             area="sum",    # total area (m2) of each class
         )
-        # percent of total wetland area occupied by each class
-        stats["percent"] = stats["area"] / total_area
+        # percent of total area occupied by each wetland class
+        stats["percent"] = stats["area"] / buffer.area.sum()
 
         # one row per class: (class value, count, area, percent)
         for val, count, area, percent in stats.itertuples():
