@@ -4,18 +4,22 @@ import json
 
 import geopandas as gpd
 import pandas as pd
-import pyogrio as po
 from geopandas.array import GeometryArray
 import shapely
+import pyogrio as po
 
 from .utils import _nice_string_to_name
-import time
 
 col_mapping = {
     "WETLAND_TYPE": "type",
     "ATTRIBUTE": "code",
 }
 
+# METHODS
+
+# -----------------------------------------------------------------------------
+# Wetland Setup
+# -----------------------------------------------------------------------------
 
 def _load_json(path: Path) -> dict:
     with open(path, "r") as f:
@@ -43,19 +47,77 @@ def _scan_nwi(nwi_path_json: str):
     # print("NWI scan complete")
     return out
 
+def _load_or_build_nwi_coverage(nwi_paths: list[str], nwi_coverage_path: str, crs: str):
 
-def wetlands_within_buffer(buffer_gs, crs_target: str, nwi_path_json: str):
-    start_time = time.time()
+    # reuse the cached coverage if it exists
+    if Path(nwi_coverage_path).exists():
+        print(f"Loading existing NWI coverage from {nwi_coverage_path}")
+        return gpd.read_file(nwi_coverage_path)
 
-    # buffer in target CRS (already is); compute once
-    # print("Scanning NWI files...")
+    print(f"Building NWI coverage at {nwi_coverage_path}...")
+    parts = []
+    # iterate over geopackages
+    for gpkg_str in nwi_paths:
+        # get path to geopackage
+        gpkg = Path(gpkg_str)
+        # Extract layer name from filename (e.g., "NY_Wetlands" from "NY_xxx.gpkg")
+        state = gpkg.stem.split('_')[0]
+        layer = f"{state}_Wetlands_Project_Metadata"
+        meta = gpd.read_file(gpkg, layer=layer)        # + filter on status field, if any (step 0)
+        parts.append(meta.to_crs(crs).make_valid())
+    coverage = gpd.GeoDataFrame(geometry=pd.concat(parts).geometry, crs=crs).dissolve()
+    coverage = coverage.explode(index_parts=False)     # separate parts -> spatial index works well
+    # save coverage to file
+    coverage.to_file(nwi_coverage_path, layer="coverage")
+    return coverage
+
+def wetland_setup(
+        nwi_path_json: str, 
+        nwi_coverage_path: str, 
+        crs: str,
+    ):
+    # index NWI geopackages
     nwi_index = _scan_nwi(nwi_path_json)
-    # print(f"Scan completed in {time.time() - start_time:.2f} seconds")
+    # build NWI coverage for quick spatial indexing
+    coverage = _load_or_build_nwi_coverage([p for p, *_ in nwi_index], nwi_coverage_path, crs)
+    return nwi_index, coverage
+
+def _coverage_fraction(buffer_gs, coverage) -> float:
+    # share of the buffer inside the NWI-mapped area (0..1)
+    covered = gpd.clip(coverage, buffer_gs).area.sum()  # clip uses the spatial index
+    return covered / buffer_gs.area.sum()
+
+def _erase_cross_file_overlap(gdf, file_col="_file", min_area=1.0):
+    """Remove overlapping portions of polygons
+
+    Args:
+        gdf (gpd.Geodataframe): input geodataframe
+        file_col (str, optional): group by dataset. Defaults to "_file".
+        min_area (float, optional): min. area for feature to be kept. 
+        Defaults to 1.0.
+
+    Returns:
+        gpd.Geodataframe: cleaned output geodataframe
+    """
+    kept, covered = [], None
+    # iterate over features, grouping by origin dataset
+    for _, part in gdf.groupby(file_col, sort=True):
+        if covered is not None:
+            part = part.copy()
+            # extract the remaining portion from the overlap
+            part["geometry"] = part.geometry.difference(covered)
+            # drop empty results and tiny slivers
+            part = part[part.area > min_area]   
+        kept.append(part)
+        combined_parts = part.union_all()
+        covered = combined_parts if covered is None else covered.union(combined_parts)
+    return gpd.GeoDataFrame(pd.concat(kept), crs=gdf.crs) 
+
+def wetlands_within_buffer(buffer_gs, crs_target: str, nwi_index: list):
 
     candidates = []
-    # print(f"Processing {len(nwi_index)} potential files...")
-    for i, (path, layer, crs_wkt, tb) in enumerate(nwi_index, 1):
-        file_start = time.time()
+    for (path, layer, crs_wkt, tb) in nwi_index:
+
         # bbox test in the file's CRS
         bbox_in_file_crs = tuple(buffer_gs.to_crs(crs_wkt).total_bounds)
         if shapely.box(*bbox_in_file_crs).intersects(shapely.box(*tb)):
@@ -66,29 +128,28 @@ def wetlands_within_buffer(buffer_gs, crs_target: str, nwi_path_json: str):
                 bbox=bbox_in_file_crs,
                 columns=["WETLAND_TYPE", "ATTRIBUTE", "geometry"],
             )
+            # tag the file that each feature came from
+            gdf["_file"] = layer
+
             if gdf is not None and not gdf.empty:
                 # keep native file CRS here
                 gdf.set_crs(crs_wkt, inplace=True)
-                candidates.append(gdf)
-                # print(
-                #     f"File {i}/{len(nwi_index)} processed in {time.time() - file_start:.2f} seconds - found wetlands"
-                # )
-        # else:
-        # print(f"File {i}/{len(nwi_index)} skipped (no intersection)")
+                # reproject and add to candidate list
+                candidates.append(gdf.to_crs(crs_target))
 
+    # No wetlands found in buffer
     if not candidates:
-        # print("No wetlands found in buffer")
         return None
 
-    # print("Merging and reprojecting results...")
-    merge_start = time.time()
+    # Merging and reprojecting results...
     gdf = gpd.GeoDataFrame(pd.concat(candidates, ignore_index=True))
-    # Reproject once to analysis CRS, THEN clip
-    gdf = gdf.to_crs(crs_target)
-    result = gpd.clip(gdf, buffer_gs)  # both in crs_target
-    # print(
-    #     f"Processing completed in {time.time() - start_time:.2f} seconds total"
-    # )
+    # clip to buffer
+    gdf = gpd.clip(gdf, buffer_gs)  # both in crs_target
+    # exit early if clip leaves empty gdf
+    if gdf.empty:
+        return None
+    # remove overlapping portions from geometry
+    result = _erase_cross_file_overlap(gdf)
     return result
 
 
@@ -97,30 +158,29 @@ def process_one_nwi(
     buffer_size: int,
     source: str,
     crs: str,
-    nwi_path_json: str,
+    nwi_index: list,
+    nwi_coverage: gpd.GeoDataFrame,
+    coverage_min: float = 0.9,  # minimum fraction of buffer that must have valid data
 ) -> dict | None:
-
-    start_time = time.time()
-    # print(f"Processing NWI for point with buffer size {buffer_size}m...")
 
     # reproject point to raster CRS - so units match buffer units
     point = point.to_crs(crs)
     # create buffer as GeoSeries from point
     buffer = gpd.GeoSeries(point, crs=crs).buffer(buffer_size)
-    # print(
-    #     f"Buffer creation completed in {time.time() - start_time:.2f} seconds"
-    # )
 
-    # get wetlands within bbox
-    gdf = wetlands_within_buffer(buffer, crs, nwi_path_json)
-
-    # exit early if no wetlands found
-    if gdf is None:
-        # print("No wetlands found - exiting")
+    # test for coverage
+    # if buffer is not covered by wetland data it should return NaN, not zero
+    total_col = f"{_nice_string_to_name(f'{source}_buff{buffer_size}')}_total_area"
+    # use 90% coverage to allow for rounding effects
+    if _coverage_fraction(buffer, nwi_coverage) < coverage_min:
         return None
 
-    # print("Processing wetlands attributes...")
-    attr_start = time.time()
+    # get wetlands within bbox
+    gdf = wetlands_within_buffer(buffer, crs, nwi_index)
+
+    # exit with zero if buffer within coverage but no intersecting wetlands
+    if gdf is None:
+        return {total_col: 0.0}
 
     # iterate over columns
     # find unique values and counts of each column in col_mapping
@@ -130,30 +190,26 @@ def process_one_nwi(
     # calculate area once
     gdf["area_m2"] = gdf.geometry.area
     total_area = gdf["area_m2"].sum()
-    # value counts + grouped sums w/o per-group lambda:
+    # record total wetland area in the buffer
+    # 0 = covered but no wetlands, NaN = not covered
+    result[total_col] = float(total_area)
+    # summarize count, area, and percent of total area for each class
     for src_col, short in col_mapping.items():
-        col_start = time.time()
-        # Get value counts (frequencies) for each class in the source column
-        vc = gdf[src_col].value_counts(sort=False)
-        # Calculate total area for each class by grouping and summing
-        sums = gdf.groupby(src_col, observed=True)["area_m2"].sum()
-        # Calculate percentage of total area for each class
-        pct = sums / total_area
-        # For each unique value in the source column
-        for val in vc.index:
-            # Create the output metric name using the source, buffer size, column shortname and value
-            name = f"{source}_buff{buffer_size}_{short}_{val}"
-            # Store count of occurrences for this value
-            result[f"{_nice_string_to_name(name)}_count"] = int(vc[val])
-            # Store total area for this value
-            result[f"{_nice_string_to_name(name)}_area"] = float(sums[val])
-            # Store percentage of total area for this value
-            result[f"{_nice_string_to_name(name)}_percent"] = float(pct[val])
-        # print(
-        #     f"Column {src_col} processed in {time.time() - col_start:.2f} seconds"
-        # )
+        # group polygons by class; count polygons and sum their area in one pass
+        stats = gdf.groupby(src_col, observed=True)["area_m2"].agg(
+            count="size",  # number of polygons in each class
+            area="sum",    # total area (m2) of each class
+        )
+        # percent of total area occupied by each wetland class
+        stats["percent"] = stats["area"] / buffer.area.sum()
 
-    # print(
-    #     f"Total processing completed in {time.time() - start_time:.2f} seconds"
-    # )
+        # one row per class: (class value, count, area, percent)
+        for val, count, area, percent in stats.itertuples():
+            # build the output column name, e.g. nwi_buff500_code_r2ubh
+            name = _nice_string_to_name(f"{source}_buff{buffer_size}_{short}_{val}")
+            # store the stats; cast numpy types to plain Python for clean CSV output
+            result[f"{name}_count"] = int(count)
+            result[f"{name}_area"] = float(area)
+            result[f"{name}_percent"] = float(percent)
+
     return result

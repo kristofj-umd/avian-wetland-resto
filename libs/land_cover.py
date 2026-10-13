@@ -42,13 +42,13 @@ NALCMS_CLASS_LUT = {
     15: "Cropland",
     16: "Barren lands",
     17: "Urban",
-    # 18: "Water",
+    18: "Water",
     19: "Snow and Ice",
 }
 
 # nlcd class lookup table
 NLCD_CLASS_LUT = {
-    # 11: "Open Water",
+    11: "Open Water",
     12: "Perennial Ice/Snow",
     21: "Developed, Open Space",
     22: "Developed, Low Intensity",
@@ -65,7 +65,7 @@ NLCD_CLASS_LUT = {
     90: "Woody Wetlands",
     95: "Emergent Herbaceous Wetlands",
     # Optional (present in metadata legend):
-    250: "NoData",
+    # 250: "NoData",
 }
 
 # ----- FUNCTIONS -----
@@ -255,9 +255,8 @@ def process_one_landcover(
     nlcd_paths: dict[int, str] | dict = {},
     nalcms_paths: dict[int, str] | dict = {},
     aws_sesh: AWSSession | None = None,
+    coverage_min: float = 0.9,  # minimum fraction of buffer that must have valid data
 ) -> dict:
-    start_time = time.time()
-    # print(f"Starting landcover processing for {source}, year {year}...")
 
     # Initialize empty result dict
     result = {}
@@ -266,9 +265,9 @@ def process_one_landcover(
         # get raster values for buffer
         if source == "nlcd":
             if year not in nlcd_paths:
-                # print(f"Year {year} not found in NLCD paths")
+                # Year {year} not found in NLCD paths
                 return result
-            # print("Extracting NLCD buffer values...")
+            # "Extracting NLCD buffer values...
             if aws_sesh is None:
                 raise ValueError("AWS session is required for NLCD data access")
             vals, area_per_pixel = nlcd_buffer_clip(
@@ -276,19 +275,26 @@ def process_one_landcover(
             )
         else:
             if year not in nalcms_paths:
-                # print(f"Year {year} not found in NALCMS paths")
+                # Year {year} not found in NALCMS paths
                 return result
-            # print("Extracting NALCMS buffer values...")
+            # "Extracting NALCMS buffer values...
             vals, area_per_pixel = nalcms_buffer_clip(
                 point, buffer_size, year, nalcms_paths
             )
 
         # Check if we got any valid values
         if vals is None or len(vals) == 0:
-            # print("No valid values found in buffer")
+            # "No valid values found in buffer
             return result
 
-        # print("Calculating class statistics...")
+        # check that enough of the buffer has data (e.g. NLCD stops at the Canadian border)
+        expected_pixels = np.pi * buffer_size**2 / area_per_pixel
+        if len(vals) / expected_pixels < coverage_min:
+            # too little coverage -> empty result -> whole block is NaN
+            return result
+
+
+        # "Calculating class statistics...
         # get count by class
         unique_values, counts = np.unique(vals, return_counts=True)
         class_counts = dict(zip(unique_values, counts))
@@ -296,31 +302,21 @@ def process_one_landcover(
         # calculate percent of total area occupied by each class
         total = np.sum(counts)
         if total == 0:
-            # print("Total count is zero")
+            # "Total count is zero
             return result
-
-        class_percents = {k: v / total for k, v in class_counts.items()}
 
         # Use appropriate lookup table
         lut = NLCD_CLASS_LUT if source == "nlcd" else NALCMS_CLASS_LUT
 
-        # print("Building result dictionary...")
+        # Building result dictionary...
         # iterate over unique values and update dict with count, percent
-        for val in [v for v in unique_values if v in lut.keys()]:
-            result.update(
-                {
-                    f"{source}_buff{buffer_size}_yr{year}_{_nice_string_to_name(lut[val])}_count": class_counts[
-                        val
-                    ],
-                    f"{source}_buff{buffer_size}_yr{year}_{_nice_string_to_name(lut[val])}_area": class_counts[
-                        val
-                    ]
-                    * area_per_pixel,
-                    f"{source}_buff{buffer_size}_yr{year}_{_nice_string_to_name(lut[val])}_percent": class_percents[
-                        val
-                    ],
-                }
-            )
+        for val, name in lut.items():
+            n = class_counts.get(val, 0)
+            stem = f"{source}_buff{buffer_size}_yr{year}_{_nice_string_to_name(name)}"
+            result[f"{stem}_count"] = n
+            result[f"{stem}_area"] = n * area_per_pixel
+            result[f"{stem}_percent"] = n / total
+
 
         # print(
         #     f"Landcover processing completed in {time.time() - start_time:.2f} seconds"

@@ -38,7 +38,7 @@ from libs.land_cover import (
     process_one_landcover,
     get_nlcd_paths,
 )
-from libs.nwi import process_one_nwi
+from libs.nwi import process_one_nwi, wetland_setup
 
 
 # -----------------------------------------------------------------------------
@@ -51,6 +51,9 @@ BUFFERS = [200, 500, 1000, 2000]
 # land cover years
 YEARS = [2010, 2015, 2020, 2023]
 
+# minimum fraction of buffer that must have valid data
+COVERAGE_MIN = 0.9
+
 # project CRS used for buffering/intersection with NWI, etc.
 PROJECT_CRS = "EPSG:5070"
 
@@ -60,13 +63,15 @@ GLFWRA_PATH = "data/GLFWRA_PCL_all.csv"
 
 # NALCMS land cover rasters (static paths on disk)
 NALCMS_PATHS = {
-    2010: "data/nalcms/land_cover_2010v3_30m_tif/NA_NALCMS_landcover_2010v3_30m/data/NA_NALCMS_landcover_2010v3_30m.tif",
-    2015: "data/nalcms/land_cover_2015v4_30m_tif/NA_NALCMS_landcover_2015v4_30m/data/NA_NALCMS_landcover_2015v4_30m.tif",
-    2020: "data/nalcms/land_cover_2020v2_30m_tif/NA_NALCMS_landcover_2020v2_30m/data/NA_NALCMS_landcover_2020v2_30m.tif",
+    2010: "M:/isabel_bird/data/nalcms/land_cover_2010v3_30m_tif/NA_NALCMS_landcover_2010v3_30m/data/NA_NALCMS_landcover_2010v3_30m.tif",
+    2015: "M:/isabel_bird/data/nalcms/land_cover_2015v4_30m_tif/NA_NALCMS_landcover_2015v4_30m/data/NA_NALCMS_landcover_2015v4_30m.tif",
+    2020: "M:/isabel_bird/data/nalcms/land_cover_2020v2_30m_tif/NA_NALCMS_landcover_2020v2_30m/data/NA_NALCMS_landcover_2020v2_30m.tif",
 }
 
 # path to json file that lists all NWI geopackages
 NWI_PATH_JSON = "data/nwi_filelist.json"
+# path to NWI coverage file (used for determining if site buffer was covered by wetland data)
+NWI_COVERAGE_PATH = "data/nwi_coverage.gpkg"
 
 # output directory
 OUTPUT_DIR = Path("data/output")
@@ -92,6 +97,8 @@ def process_source_locations(
     df: pd.DataFrame,
     nlcd_paths: dict,
     nlcd_sesh,
+    nwi_index: list,
+    nwi_coverage: gpd.GeoDataFrame,
 ) -> pd.DataFrame:
     """
     For each row in df:
@@ -150,6 +157,7 @@ def process_source_locations(
                     source="nlcd",
                     nlcd_paths=nlcd_paths,
                     aws_sesh=nlcd_sesh,
+                    coverage_min=COVERAGE_MIN,
                 )
                 if nlcd_result is not None:
                     row_dicts.append(nlcd_result)
@@ -161,6 +169,7 @@ def process_source_locations(
                     year=year,
                     source="nalcms",
                     nalcms_paths=NALCMS_PATHS,
+                    coverage_min=COVERAGE_MIN,
                 )
                 if nalcms_result is not None:
                     row_dicts.append(nalcms_result)
@@ -171,7 +180,9 @@ def process_source_locations(
                 buffer_size=buffer_size,
                 source="nwi",
                 crs=PROJECT_CRS,
-                nwi_path_json=NWI_PATH_JSON,
+                nwi_index=nwi_index,
+                nwi_coverage=nwi_coverage,
+                coverage_min=COVERAGE_MIN,
             )
             if nwi_result is not None:
                 row_dicts.append(nwi_result)
@@ -191,6 +202,20 @@ def process_source_locations(
     )
     results_df = df.join(new_cols_df)
 
+    # backfill zeroes in NWI class columns for buffers with no wetlands
+    for b in BUFFERS:
+        total_col = f"nwi_buff{b}_total_area"
+        # skip this buffer if the total area column is not present
+        if total_col not in results_df.columns:
+            continue
+        # only fill zeros for buffers that have some coverage
+        covered = results_df[f"nwi_buff{b}_total_area"].notna()
+        # get all columns related to this buffer's NWI classes
+        cols = [c for c in results_df.columns
+                if c.startswith((f"nwi_buff{b}_code_", f"nwi_buff{b}_type_"))]
+        # fill zeros for all NWI class columns where the buffer has coverage but no wetlands
+        results_df.loc[covered, cols] = results_df.loc[covered, cols].fillna(0)
+
     return results_df
 
 
@@ -206,6 +231,7 @@ def main():
     # Step 3. Prep NLCD session + path lookup
     nlcd_sesh = nlcd_sesh_setup()
     nlcd_paths = get_nlcd_paths()
+    nwi_index, coverage = wetland_setup(NWI_PATH_JSON, NWI_COVERAGE_PATH, PROJECT_CRS)
 
     # Step 4. Process GLFWRA
     glfwra_results = process_source_locations(
@@ -213,6 +239,8 @@ def main():
         df=glfwra_df,
         nlcd_paths=nlcd_paths,
         nlcd_sesh=nlcd_sesh,
+        nwi_index=nwi_index,
+        nwi_coverage=coverage,
     )
     print("Completed processing for GLFWRA. Writing CSV...")
     glfwra_outpath = OUTPUT_DIR / "glfwra_class_summary_by_buffer.csv"
@@ -224,6 +252,8 @@ def main():
         df=cwmp_df,
         nlcd_paths=nlcd_paths,
         nlcd_sesh=nlcd_sesh,
+        nwi_index=nwi_index,
+        nwi_coverage=coverage,
     )
     print("Completed processing for CWMP. Writing CSV...")
     cwmp_outpath = OUTPUT_DIR / "cwmp_class_summary_by_buffer.csv"
