@@ -12,7 +12,12 @@ import pytest
 from shapely.geometry import Point, box
 
 from conftest import CRS, LAT, LON, wetlands_gdf
-from libs.nwi import _coverage_fraction, _load_or_build_nwi_coverage, process_one_nwi
+from libs.nwi import (
+    _coverage_fraction,
+    _load_or_build_nwi_coverage,
+    process_one_nwi,
+    wetland_setup,
+)
 
 BUFFER = 500
 TOTAL_COL = f"nwi_buff{BUFFER}_total_area"
@@ -152,15 +157,9 @@ def test_existing_cache_is_loaded_not_rebuilt(tmp_path, center, two_state_meta):
     assert cov.area.sum() == pytest.approx(cached.area)
 
 
-def test_wetland_setup_returns_index_and_coverage(tmp_path, monkeypatch, two_state_meta):
-    # the pipeline script pulls in rasterio/boto3, so import it only for this test
-    import class_summary_by_buffer as pipeline
-
+def test_wetland_setup_returns_index_and_coverage(tmp_path, two_state_meta):
     nwi, expected = two_state_meta
-    monkeypatch.setattr(pipeline, "NWI_PATH_JSON", nwi.json)
-    monkeypatch.setattr(pipeline, "NWI_COVERAGE_PATH", str(tmp_path / "cov.gpkg"))
-
-    nwi_index, coverage = pipeline.wetland_setup()
+    nwi_index, coverage = wetland_setup(nwi.json, str(tmp_path / "cov.gpkg"), CRS)
 
     assert [p for p, *_ in nwi_index] == nwi.paths
     assert isinstance(coverage, gpd.GeoDataFrame)
