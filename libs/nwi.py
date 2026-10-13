@@ -51,8 +51,10 @@ def _load_or_build_nwi_coverage(nwi_paths: list[str], nwi_coverage_path: str, cr
 
     # reuse the cached coverage if it exists
     if Path(nwi_coverage_path).exists():
+        print(f"Loading existing NWI coverage from {nwi_coverage_path}")
         return gpd.read_file(nwi_coverage_path)
 
+    print(f"Building NWI coverage at {nwi_coverage_path}...")
     parts = []
     # iterate over geopackages
     for gpkg_str in nwi_paths:
